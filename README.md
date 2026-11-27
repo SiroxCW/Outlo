@@ -27,6 +27,8 @@ Building the .deb and .rpm packages on Fedora needs the `libxcrypt-compat` packa
 
 Until real accounts are supported, the app fills itself with invented demo data on the first start. A development build keeps it in `~/.config/outlo-dev`. Delete that folder to start again from nothing.
 
+The Flatpak manifest is in `packaging/flatpak/`. It is a first working version and not yet ready for Flathub.
+
 ## Source layout
 
 ```
@@ -36,6 +38,7 @@ src/renderer/   user interface (React and Fluent UI)
 src/core/       background process: database, demo data, later the mail sync
 src/shared/     code and types used by all of them
 resources/      icons
+packaging/      Flatpak manifest
 ```
 
 ## License

@@ -4,3 +4,5 @@ out
 dist
 *.tsbuildinfo
 .eslintcache
+packaging/flatpak/generated-sources.json
+.flatpak-builder

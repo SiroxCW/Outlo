@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.siroxcw.outlo</id>
+  <name>Outlo Mail</name>
+  <summary>Mail client for the Linux desktop</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <developer id="io.github.siroxcw">
+    <name>Outlo Mail contributors</name>
+  </developer>
+  <description>
+    <p>
+      Outlo Mail is a mail client for the Linux desktop. It works with Outlook.com, Microsoft 365,
+      Gmail and any IMAP account, keeps your mail on your own computer and works offline.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.siroxcw.outlo.desktop</launchable>
+  <url type="homepage">https://github.com/SiroxCW/Outlo</url>
+  <url type="bugtracker">https://github.com/SiroxCW/Outlo/issues</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.0.1" date="2026-11-27" />
+  </releases>
+</component>

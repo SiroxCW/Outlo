@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Outlo Mail
+Comment=Mail client for the Linux desktop
+Exec=outlo %U
+Icon=io.github.siroxcw.outlo
+Terminal=false
+Categories=Office;Network;Email;
+Keywords=mail;email;e-mail;
+StartupWMClass=outlo
