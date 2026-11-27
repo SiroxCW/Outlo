@@ -4,13 +4,16 @@ import {
   type CoreEvents,
   type CoreRequests,
   type HostRequests,
+  type HostServices,
   type MessageFilter,
 } from '@shared/api';
-import { createServer, type Endpoint } from '@shared/rpc';
+import { createClient, createServer, type Endpoint } from '@shared/rpc';
 import { openDatabase } from './db/database';
 import { createDemoBody } from './demo/body';
 import { DEFAULT_DEMO_OPTIONS, DemoSeeder, type DemoOptions } from './demo/seeder';
+import type { Fetch } from './graph/client';
 import { MailStore } from './mail/store';
+import { SyncEngine } from './sync/engine';
 import * as check from './validate';
 
 const FILTERS: readonly MessageFilter[] = ['all', 'focused', 'other'];
@@ -21,6 +24,8 @@ const UI_SETTINGS = 'ui.';
 export interface CoreOptions {
   databasePath: string;
   demo?: Partial<DemoOptions>;
+  // How the core reaches mail servers. Electron's network stack in the app, a fake in tests.
+  fetch?: Fetch;
 }
 
 // The core without any Electron code, so tests can run it under plain Node.
@@ -30,6 +35,7 @@ export function createCore(options: CoreOptions) {
   const store = new MailStore(db);
   let closed = false;
   let seeding: Promise<void> = Promise.resolve();
+  let engine: SyncEngine | undefined;
 
   const server = createServer<CoreRequests, CoreEvents>({
     'core.info': () => ({ pid: process.pid, startedAt, nodeVersion: process.versions.node }),
@@ -98,6 +104,12 @@ export function createCore(options: CoreOptions) {
       return undefined;
     },
 
+    'sync.status': () => engine?.status() ?? [],
+    'sync.now': () => {
+      engine?.syncNow();
+      return undefined;
+    },
+
     'settings.get': () => store.listSettings(UI_SETTINGS),
 
     'settings.set': (params) => {
@@ -121,6 +133,7 @@ export function createCore(options: CoreOptions) {
         check.text(input.displayName, 'displayName', 200),
       );
       server.emit('accounts.changed', undefined);
+      engine?.refresh();
       return { id };
     },
 
@@ -128,6 +141,7 @@ export function createCore(options: CoreOptions) {
       const remoteId = store.removeAccount(check.id(check.record(params, 'params').id, 'id'));
       server.emit('accounts.changed', undefined);
       server.emit('folders.changed', undefined);
+      engine?.refresh();
       return { remoteId };
     },
   });
@@ -176,9 +190,29 @@ export function createCore(options: CoreOptions) {
   return {
     connect: (endpoint: Endpoint) => server.connect(endpoint),
     connectHost: (endpoint: Endpoint) => hostServer.connect(endpoint),
+
+    // The line on which the core asks the main process for access tokens. The mail sync
+    // starts once it is there.
+    connectServices(endpoint: Endpoint): void {
+      if (engine || closed) return;
+      const host = createClient<HostServices>(endpoint);
+      engine = new SyncEngine({
+        store,
+        fetch: options.fetch ?? ((url, init) => fetch(url, init)),
+        requestHost: (method, params) => host.request(method, params),
+        events: {
+          foldersChanged: () => server.emit('folders.changed', undefined),
+          messagesChanged: (folderIds) => server.emit('messages.changed', { folderIds }),
+          statusChanged: () => engine && server.emit('sync.changed', engine.status()),
+        },
+      });
+      engine.refresh();
+    },
+
     seedDemoData,
     close(): void {
       closed = true;
+      engine?.stop();
       db.close();
     },
   };

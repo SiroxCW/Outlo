@@ -36,7 +36,7 @@ The Flatpak manifest is in `packaging/flatpak/`. It is a first working version a
 src/main/       Electron main process: windows, security, starting the core
 src/preload/    bridge between the UI and the core
 src/renderer/   user interface (React and Fluent UI)
-src/core/       background process: database, demo data, later the mail sync
+src/core/       background process: database, mail sync, demo data
 src/shared/     code and types used by all of them
 resources/      icons
 packaging/      Flatpak manifest

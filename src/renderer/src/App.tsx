@@ -17,6 +17,7 @@ import { useMailboxes } from './core/useFolders';
 import { useMessage } from './core/useMessage';
 import { useSession } from './core/useSession';
 import { useSettings, type Settings } from './core/useSettings';
+import { useSyncStatus } from './core/useSyncStatus';
 import { t } from './i18n';
 import { FolderPane } from './mail/FolderPane';
 import { MessageList } from './mail/MessageList';
@@ -76,6 +77,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   }, [theme, dark]);
 
   const { mailboxes, error } = useMailboxes();
+  const syncStatus = useSyncStatus();
   const [chosenFolderId, setChosenFolderId] = useState<number>();
   const [inboxFilter, setInboxFilter] = useState<MessageFilter>('focused');
   const [selectedId, setSelectedId] = useState<number>();
@@ -99,12 +101,15 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const message = selectedId === undefined ? null : loaded;
 
   // Opening an unread message marks it as read, once. The user can mark it unread again.
+  // Changes are not sent to mail providers yet, so only demo mail can be changed for now.
+  const provider = mailboxes?.accounts.find((entry) => entry.id === message?.accountId)?.provider;
+  const editable = provider === 'demo';
   const markedAsRead = useRef<number>(undefined);
   useEffect(() => {
-    if (!message || message.isRead || markedAsRead.current === message.id) return;
+    if (!message || !editable || message.isRead || markedAsRead.current === message.id) return;
     markedAsRead.current = message.id;
     void window.outlo.request('messages.setRead', { ids: [message.id], isRead: true });
-  }, [message]);
+  }, [message, editable]);
 
   const searching = search.trim() !== '';
   const noAccounts = !session.demo && mailboxes?.accounts.length === 0;
@@ -120,7 +125,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
         <AppBar dark={dark} />
         <div className={styles.main}>
           <Ribbon
-            message={message}
+            message={editable ? message : null}
             theme={themeChoice}
             titleBar={titleBar}
             onToggleFolders={() => setFoldersVisible((visible) => !visible)}
@@ -160,6 +165,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                       mailboxes={mailboxes}
                       onAddAccount={session.demo ? undefined : () => setAddingAccount(true)}
                       onRemoveAccount={session.demo ? undefined : setRemoving}
+                      syncStatus={syncStatus}
                       selectedFolderId={searching ? undefined : folder?.id}
                       onSelect={(folderId) => {
                         setChosenFolderId(folderId);

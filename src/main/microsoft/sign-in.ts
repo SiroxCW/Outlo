@@ -1,7 +1,11 @@
 import { join } from 'node:path';
-import { CryptoProvider, PublicClientApplication } from '@azure/msal-node';
+import {
+  CryptoProvider,
+  InteractionRequiredAuthError,
+  PublicClientApplication,
+} from '@azure/msal-node';
 import { app, safeStorage, shell } from 'electron';
-import type { AddAccountResult } from '@shared/api';
+import type { AddAccountResult, TokenResult } from '@shared/api';
 import { requestCore } from '../core-process';
 import { ADMIN_CONSENT_URL, AUTHORITY, CLIENT_ID, SCOPES } from './config';
 import { classifyRedirectError, listenForRedirect, SignInAborted, type Loopback } from './loopback';
@@ -86,6 +90,29 @@ export async function addMicrosoftAccount(): Promise<AddAccountResult> {
 
 export function cancelMicrosoftSignIn(): void {
   running?.cancel();
+}
+
+// A fresh access token for an account that signed in before, without showing anything.
+export async function getMicrosoftToken(
+  homeAccountId: string,
+  forceRefresh: boolean,
+): Promise<TokenResult> {
+  try {
+    const msal = getClient();
+    const account = await msal.getTokenCache().getAccountByHomeId(homeAccountId);
+    if (!account) return { status: 'signInNeeded' };
+    const result = await msal.acquireTokenSilent({ account, scopes: SCOPES, forceRefresh });
+    return {
+      status: 'ok',
+      accessToken: result.accessToken,
+      expiresAt: result.expiresOn?.getTime() ?? Date.now(),
+    };
+  } catch (error) {
+    if (error instanceof InteractionRequiredAuthError) return { status: 'signInNeeded' };
+    const code = (error as { errorCode?: string }).errorCode ?? '';
+    if (/network|endpoints_resolution|timeout/.test(code)) return { status: 'offline' };
+    return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 // Forgets the sign-in of an account that was removed from the app.

@@ -120,6 +120,30 @@ describe('schema', () => {
     ]);
   });
 
+  it('upgrades a version 2 database: sync state, and message IDs unique per account', () => {
+    const db = new DatabaseSync(':memory:');
+    migrate(db, MIGRATIONS.slice(0, 2));
+    db.exec(`
+      INSERT INTO accounts (id, provider, email, display_name) VALUES (1, 'demo', 'a', 'A');
+      INSERT INTO folders (id, account_id, name) VALUES (1, 1, 'One'), (2, 1, 'Two');
+      INSERT INTO messages (account_id, folder_id, received_at) VALUES (1, 1, 5);
+    `);
+    migrate(db);
+    expect(
+      db.prepare('SELECT sync_link, sync_pending, sync_round FROM folders WHERE id = 1').get(),
+    ).toEqual({ sync_link: null, sync_pending: 1, sync_round: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM messages WHERE sync_round = 0').get()).toEqual({
+      n: 1,
+    });
+
+    const insert = (folder: number) =>
+      db.exec(
+        `INSERT INTO messages (account_id, folder_id, remote_id, received_at) VALUES (1, ${folder}, 'x', 1)`,
+      );
+    insert(1);
+    expect(() => insert(2)).toThrow();
+  });
+
   it('does not allow the same account of a provider twice', () => {
     const db = new DatabaseSync(':memory:');
     migrate(db);

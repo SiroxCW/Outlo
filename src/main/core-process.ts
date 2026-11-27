@@ -8,13 +8,14 @@ import {
   utilityProcess,
   type UtilityProcess,
 } from 'electron';
-import { CORE_PORT, CORE_PORT_REQUEST, type HostRequests } from '@shared/api';
-import { createClient } from '@shared/rpc';
+import { CORE_PORT, CORE_PORT_REQUEST, type HostRequests, type HostServices } from '@shared/api';
+import { createClient, createServer, type Endpoint, type Handlers } from '@shared/rpc';
 import corePath from '../core/index?modulePath';
 import { isTrustedSender } from './renderer-site';
 
 let core: UtilityProcess | undefined;
 let host: ReturnType<typeof createClient<HostRequests>> | undefined;
+let services: Handlers<HostServices> | undefined;
 let demo = false;
 let quitting = false;
 
@@ -38,18 +39,34 @@ function fork(): void {
   });
 
   // A line of its own for the main process, for the requests the UI is not allowed to send.
-  const { port1, port2 } = new MessageChannelMain();
-  child.postMessage('host', [port1]);
-  host = createClient<HostRequests>({
-    post: (message) => port2.postMessage(message),
-    listen: (handler) => port2.on('message', (event) => handler(event.data)),
-  });
-  port2.start();
+  const hostChannel = new MessageChannelMain();
+  child.postMessage('host', [hostChannel.port1]);
+  host = createClient<HostRequests>(toEndpoint(hostChannel.port2));
+
+  // And one in the other direction, on which the core asks for access tokens. The demo has
+  // no real accounts and gets none.
+  if (services && !demo) {
+    const serviceChannel = new MessageChannelMain();
+    createServer<HostServices, Record<string, never>>(services).connect(
+      toEndpoint(serviceChannel.port2),
+    );
+    child.postMessage('services', [serviceChannel.port1]);
+  }
   core = child;
 }
 
-export function startCore(options: { demo: boolean }): void {
+function toEndpoint(port: Electron.MessagePortMain): Endpoint {
+  port.start();
+  return {
+    post: (message) => port.postMessage(message),
+    listen: (handler) => port.on('message', (event) => handler(event.data)),
+    onClose: (handler) => port.on('close', handler),
+  };
+}
+
+export function startCore(options: { demo: boolean; services: Handlers<HostServices> }): void {
   demo = options.demo;
+  services = options.services;
   app.once('before-quit', () => (quitting = true));
   fork();
 

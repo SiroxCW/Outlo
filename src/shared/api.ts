@@ -72,6 +72,24 @@ export interface Message extends MessageSummary {
 
 export type MessageFilter = 'all' | 'focused' | 'other';
 
+export type SyncState =
+  // Headers are still being fetched.
+  | 'syncing'
+  | 'idle'
+  | 'offline'
+  // The stored sign-in no longer works. The user has to sign in again.
+  | 'signInNeeded'
+  // The account exists, but has no mailbox at this provider.
+  | 'noMailbox'
+  | 'error';
+
+export interface AccountSyncStatus {
+  accountId: number;
+  state: SyncState;
+  // Details for the state 'error'.
+  message: string | null;
+}
+
 export interface MessagePage {
   total: number;
   offset: number;
@@ -100,6 +118,10 @@ export type CoreRequests = {
   'messages.setRead': { params: { ids: number[]; isRead: boolean }; result: undefined };
   'messages.setFlagged': { params: { ids: number[]; isFlagged: boolean }; result: undefined };
 
+  'sync.status': { params: undefined; result: AccountSyncStatus[] };
+  // Checks all accounts for news right away.
+  'sync.now': { params: undefined; result: undefined };
+
   // Settings of the user interface. Keys start with "ui.".
   'settings.get': { params: undefined; result: Record<string, string> };
   'settings.set': { params: { key: string; value: string }; result: undefined };
@@ -111,6 +133,7 @@ export type CoreEvents = {
   'folders.changed': undefined;
   'messages.changed': { folderIds: number[] };
   'settings.changed': undefined;
+  'sync.changed': AccountSyncStatus[];
 };
 
 export type CoreEvent = {
@@ -131,6 +154,17 @@ export type HostRequests = {
   };
   // Deletes the account with all its local data. Returns its ID at the provider.
   'accounts.remove': { params: { id: number }; result: { remoteId: string | null } };
+};
+
+export type TokenResult =
+  | { status: 'ok'; accessToken: string; expiresAt: number }
+  | { status: 'signInNeeded' }
+  | { status: 'offline' }
+  | { status: 'failed'; message: string };
+
+// What the core asks of the main process. The main process keeps the sign-ins.
+export type HostServices = {
+  'auth.getToken': { params: { remoteId: string; forceRefresh: boolean }; result: TokenResult };
 };
 
 export type AddAccountResult =

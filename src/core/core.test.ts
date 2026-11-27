@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CoreEvent, CoreEvents, CoreRequests, HostRequests } from '@shared/api';
+import type {
+  CoreEvent,
+  CoreEvents,
+  CoreRequests,
+  HostRequests,
+  HostServices,
+  TokenResult,
+} from '@shared/api';
 import { createEndpointPair } from '@shared/memory-endpoint';
-import { createClient } from '@shared/rpc';
+import { createClient, createServer } from '@shared/rpc';
 import { createCore } from './core';
+import { FakeGraph } from './sync/fake-graph';
 
 const DEMO = { largeFolderSize: 300, otherFolderSize: 40, batchSize: 100 };
 const cores: ReturnType<typeof createCore>[] = [];
@@ -213,5 +221,119 @@ describe('accounts through the main process', () => {
     const { raw } = startWithHost();
     await expect(raw('accounts.add', account)).rejects.toThrow('Unknown method');
     await expect(raw('accounts.remove', { id: 1 })).rejects.toThrow('Unknown method');
+  });
+});
+
+describe('mail sync', () => {
+  async function startWithGraph(tokenStatus: TokenResult['status'] = 'ok') {
+    const graph = new FakeGraph();
+    const inbox = graph.addFolder('Inbox', { wellKnown: 'inbox' });
+    graph.addMessage(inbox, { subject: 'From the server' });
+
+    const core = createCore({ databasePath: ':memory:', fetch: graph.fetch });
+    cores.push(core);
+    const [uiSide, coreSide] = createEndpointPair();
+    core.connect(coreSide);
+    const client = createClient<CoreRequests, CoreEvents>(uiSide);
+    const events: CoreEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const [hostSide, hostCoreSide] = createEndpointPair();
+    core.connectHost(hostCoreSide);
+    const host = createClient<HostRequests>(hostSide);
+
+    const asked: HostServices['auth.getToken']['params'][] = [];
+    const [serviceSide, serviceCoreSide] = createEndpointPair();
+    createServer<HostServices, Record<string, never>>({
+      'auth.getToken': (params) => {
+        asked.push(params);
+        return tokenStatus === 'ok'
+          ? { status: 'ok', accessToken: 'secret-token', expiresAt: Date.now() + 3_600_000 }
+          : ({ status: tokenStatus } as TokenResult);
+      },
+    }).connect(serviceSide);
+    core.connectServices(serviceCoreSide);
+
+    const waitFor = async (state: string) => {
+      for (let tries = 0; tries < 200; tries++) {
+        const [status] = await client.request('sync.status', undefined);
+        if (status?.state === state) return;
+        await settle();
+      }
+      throw new Error(`The sync never reached the state ${state}`);
+    };
+    return { graph, inbox, client, host, events, asked, waitFor };
+  }
+  const account = {
+    provider: 'graph',
+    remoteId: 'home-1',
+    email: 'a@b.example',
+    displayName: 'A',
+  } as const;
+
+  it('starts when an account is added and brings in folders and headers', async () => {
+    const { client, host, events, asked, waitFor } = await startWithGraph();
+    expect(await client.request('sync.status', undefined)).toEqual([]);
+
+    const { id } = await host.request('accounts.add', account);
+    await waitFor('idle');
+
+    const folders = await client.request('folders.list', undefined);
+    expect(folders).toMatchObject([
+      { accountId: id, name: 'Inbox', role: 'inbox', unreadCount: 1 },
+    ]);
+    const page = await client.request('messages.list', {
+      folderId: folders[0]!.id,
+      filter: 'all',
+      offset: 0,
+      limit: 10,
+    });
+    expect(page.messages.map((message) => message.subject)).toEqual(['From the server']);
+
+    // One token is enough for all requests, and it is asked for by the ID of the account.
+    expect(asked).toEqual([{ remoteId: 'home-1', forceRefresh: false }]);
+    const types = events.map((event) => event.type);
+    expect(types).toContain('folders.changed');
+    expect(types).toContain('messages.changed');
+    expect(events.findLast((event) => event.type === 'sync.changed')?.payload).toEqual([
+      { accountId: id, state: 'idle', message: null },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('secret-token');
+  });
+
+  it('opens a synced message without inventing a text for it', async () => {
+    const { client, host, waitFor } = await startWithGraph();
+    await host.request('accounts.add', account);
+    await waitFor('idle');
+    const [folder] = await client.request('folders.list', undefined);
+    const page = await client.request('messages.list', {
+      folderId: folder!.id,
+      filter: 'all',
+      offset: 0,
+      limit: 1,
+    });
+    const message = await client.request('messages.get', { id: page.messages[0]!.id });
+    expect(message).toMatchObject({ subject: 'From the server', body: null, attachments: [] });
+  });
+
+  it('reports an account whose sign-in no longer works', async () => {
+    const context = await startWithGraph('signInNeeded');
+    await context.host.request('accounts.add', account);
+    await context.waitFor('signInNeeded');
+    expect(await context.client.request('folders.list', undefined)).toEqual([]);
+  });
+
+  it('stops the sync of a removed account', async () => {
+    const { graph, client, host, waitFor } = await startWithGraph();
+    const { id } = await host.request('accounts.add', account);
+    await waitFor('idle');
+    await host.request('accounts.remove', { id });
+    expect(await client.request('sync.status', undefined)).toEqual([]);
+    expect(await client.request('folders.list', undefined)).toEqual([]);
+
+    const before = graph.requests.length;
+    await client.request('sync.now', undefined);
+    await settle();
+    expect(graph.requests).toHaveLength(before);
   });
 });

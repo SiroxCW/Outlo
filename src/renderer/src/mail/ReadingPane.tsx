@@ -53,6 +53,7 @@ const useStyles = makeStyles({
   line: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   muted: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   side: { flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' },
+  preview: { padding: '0 24px', overflowWrap: 'anywhere' },
   attachments: {
     flexShrink: 0,
     display: 'flex',
@@ -152,7 +153,14 @@ export function ReadingPane({ message, dark }: ReadingPaneProps) {
           </div>
         )}
 
-        {message.body && <MessageBody body={message.body} dark={dark} />}
+        {message.body ? (
+          <MessageBody body={message.body} dark={dark} />
+        ) : (
+          <div className={styles.preview}>
+            <p>{message.preview}</p>
+            <p className={styles.muted}>{t('reading.previewOnly')}</p>
+          </div>
+        )}
       </div>
     </article>
   );

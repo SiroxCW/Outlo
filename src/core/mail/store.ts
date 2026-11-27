@@ -13,11 +13,16 @@ import type {
   MessageSummary,
 } from '@shared/api';
 import { transaction, type Database } from '../db/database';
+import type { RemoteMessage } from '../graph/mapping';
 import { toFtsQuery } from './fts-query';
 
 type Row = Record<string, unknown>;
 
 const IMPORTANCE: Importance[] = ['low', 'normal', 'high'];
+
+// Changes are not sent to a mail provider yet. Until then only mail without a provider can
+// change, or the app and the server would show different things.
+const LOCAL_ONLY = 'remote_id IS NULL';
 
 const SUMMARY_COLUMNS = `
   m.id, m.account_id, m.folder_id, m.thread_id, m.subject, m.preview, m.from_name,
@@ -48,6 +53,27 @@ export interface NewMessage {
   isFocused: boolean;
   hasAttachments: boolean;
   importance: Importance;
+}
+
+// A folder as the provider reports it. The list given to saveRemoteFolders is always complete.
+export interface RemoteFolder {
+  remoteId: string;
+  parentRemoteId: string | null;
+  name: string;
+  role: FolderRole | null;
+  sortOrder: number;
+  totalCount: number;
+  unreadCount: number;
+}
+
+export interface SyncFolder {
+  id: number;
+  remoteId: string;
+  role: FolderRole | null;
+  syncLink: string | null;
+  // 0: nothing waiting, 1: a round from the start is running, 2: a round of changes is running.
+  syncPending: number;
+  syncRound: number;
 }
 
 export interface NewAttachment {
@@ -225,7 +251,8 @@ export class MailStore {
 
   setRead(ids: number[], isRead: boolean): number[] {
     const update = this.sql(
-      'UPDATE messages SET is_read = ?1 WHERE id = ?2 AND is_read <> ?1 RETURNING folder_id',
+      `UPDATE messages SET is_read = ?1 WHERE id = ?2 AND is_read <> ?1 AND ${LOCAL_ONLY}
+       RETURNING folder_id`,
     );
     const adjust = this.sql('UPDATE folders SET unread_count = unread_count + ? WHERE id = ?');
 
@@ -244,7 +271,8 @@ export class MailStore {
 
   setFlagged(ids: number[], isFlagged: boolean): number[] {
     const update = this.sql(
-      'UPDATE messages SET is_flagged = ?1 WHERE id = ?2 AND is_flagged <> ?1 RETURNING folder_id',
+      `UPDATE messages SET is_flagged = ?1 WHERE id = ?2 AND is_flagged <> ?1 AND ${LOCAL_ONLY}
+       RETURNING folder_id`,
     );
     return this.transaction(() => {
       const folderIds = new Set<number>();
@@ -358,6 +386,219 @@ export class MailStore {
        WHERE id = ?1`,
     );
     for (const folderId of folderIds) recount.run(folderId);
+  }
+
+  // Writes used by the sync with a mail provider.
+
+  listRemoteAccounts(provider: string): { id: number; remoteId: string }[] {
+    return this.sql(
+      'SELECT id, remote_id FROM accounts WHERE provider = ? AND remote_id IS NOT NULL ORDER BY id',
+    )
+      .all(provider)
+      .map((row) => ({ id: row.id as number, remoteId: row.remote_id as string }));
+  }
+
+  listSyncFolders(accountId: number): SyncFolder[] {
+    return this.sql(
+      `SELECT id, remote_id, role, sync_link, sync_pending, sync_round FROM folders
+       WHERE account_id = ? AND remote_id IS NOT NULL ORDER BY sort_order, id`,
+    )
+      .all(accountId)
+      .map((row) => ({
+        id: row.id as number,
+        remoteId: row.remote_id as string,
+        role: row.role as FolderRole | null,
+        syncLink: row.sync_link as string | null,
+        syncPending: row.sync_pending as number,
+        syncRound: row.sync_round as number,
+      }));
+  }
+
+  // Makes the local folders of an account match the list. Returns whether anything changed.
+  saveRemoteFolders(accountId: number, folders: RemoteFolder[]): boolean {
+    return this.transaction(() => {
+      const known = new Map<string, Row>();
+      const rows = this.sql(
+        'SELECT * FROM folders WHERE account_id = ? AND remote_id IS NOT NULL',
+      ).all(accountId);
+      for (const row of rows) known.set(row.remote_id as string, row);
+      let changed = false;
+
+      // New folders first, so every parent exists before a folder points to it.
+      const ids = new Map<string, number>();
+      for (const folder of folders) {
+        const row = known.get(folder.remoteId);
+        if (row) {
+          ids.set(folder.remoteId, row.id as number);
+          continue;
+        }
+        const result = this.sql(
+          'INSERT INTO folders (account_id, remote_id, name, is_favorite) VALUES (?, ?, ?, ?)',
+        ).run(accountId, folder.remoteId, folder.name, folder.role === 'inbox' ? 1 : 0);
+        ids.set(folder.remoteId, Number(result.lastInsertRowid));
+        changed = true;
+      }
+
+      const update = this.sql(
+        `UPDATE folders SET parent_id = ?, name = ?, role = ?, sort_order = ?, total_count = ?,
+           unread_count = ? WHERE id = ?`,
+      );
+      for (const folder of folders) {
+        const parentId = folder.parentRemoteId ? (ids.get(folder.parentRemoteId) ?? null) : null;
+        const row = known.get(folder.remoteId);
+        const same =
+          row &&
+          row.parent_id === parentId &&
+          row.name === folder.name &&
+          row.role === folder.role &&
+          row.sort_order === folder.sortOrder &&
+          row.total_count === folder.totalCount &&
+          row.unread_count === folder.unreadCount;
+        if (same) continue;
+        update.run(
+          parentId,
+          folder.name,
+          folder.role,
+          folder.sortOrder,
+          folder.totalCount,
+          folder.unreadCount,
+          ids.get(folder.remoteId)!,
+        );
+        changed = true;
+      }
+
+      for (const [remoteId, row] of known) {
+        if (ids.has(remoteId)) continue;
+        this.sql('DELETE FROM folders WHERE id = ?').run(row.id as number);
+        changed = true;
+      }
+      return changed;
+    });
+  }
+
+  setFolderSync(folderId: number, link: string | null, pending: number): void {
+    this.sql('UPDATE folders SET sync_link = ?, sync_pending = ? WHERE id = ?').run(
+      link,
+      pending,
+      folderId,
+    );
+  }
+
+  // Starts a round that reads the folder from the start. Returns the number of the round.
+  startFolderRound(folderId: number): number {
+    const row = this.sql(
+      `UPDATE folders SET sync_round = sync_round + 1, sync_link = NULL, sync_pending = 1
+       WHERE id = ? RETURNING sync_round`,
+    ).get(folderId);
+    return row!.sync_round as number;
+  }
+
+  // Removes what a round from the start did not meet: it is no longer in the folder.
+  finishFolderRound(folderId: number, round: number): number {
+    const result = this.sql('DELETE FROM messages WHERE folder_id = ? AND sync_round < ?').run(
+      folderId,
+      round,
+    );
+    return Number(result.changes);
+  }
+
+  // Stores one page of a folder's headers. Returns the folders whose content changed.
+  saveRemoteMessages(
+    accountId: number,
+    folderId: number,
+    round: number,
+    messages: RemoteMessage[],
+    removedIds: string[],
+  ): number[] {
+    const find = this.sql(
+      'SELECT id, folder_id FROM messages WHERE account_id = ? AND remote_id = ?',
+    );
+    const thread = this.sql(
+      `INSERT INTO threads (account_id, remote_id) VALUES (?, ?)
+       ON CONFLICT (account_id, remote_id) WHERE remote_id IS NOT NULL
+       DO UPDATE SET remote_id = excluded.remote_id RETURNING id`,
+    );
+    const insert = this.sql(
+      `INSERT INTO messages (account_id, folder_id, thread_id, remote_id, subject, preview,
+         from_name, from_address, to_recipients, cc_recipients, received_at, is_read, is_flagged,
+         is_focused, has_attachments, importance, sync_round)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    // A field the provider left out arrives as NULL and keeps its stored value.
+    const update = this.sql(
+      `UPDATE messages SET folder_id = ?, sync_round = ?,
+         thread_id = coalesce(?, thread_id), subject = coalesce(?, subject),
+         preview = coalesce(?, preview), from_name = coalesce(?, from_name),
+         from_address = coalesce(?, from_address), to_recipients = coalesce(?, to_recipients),
+         cc_recipients = coalesce(?, cc_recipients), received_at = coalesce(?, received_at),
+         is_read = coalesce(?, is_read), is_flagged = coalesce(?, is_flagged),
+         is_focused = coalesce(?, is_focused), has_attachments = coalesce(?, has_attachments),
+         importance = coalesce(?, importance)
+       WHERE id = ?`,
+    );
+    // A message that moved may already be stored in its new folder. Then it must stay.
+    const remove = this.sql(
+      'DELETE FROM messages WHERE account_id = ? AND remote_id = ? AND folder_id = ? RETURNING id',
+    );
+    const flag = (value: boolean | undefined) => (value === undefined ? null : value ? 1 : 0);
+    const json = (value: Address[] | undefined) => (value ? JSON.stringify(value) : null);
+
+    return this.transaction(() => {
+      const changed = new Set<number>();
+      for (const { remoteId, fields } of messages) {
+        const threadId = fields.conversationId
+          ? (thread.get(accountId, fields.conversationId)!.id as number)
+          : null;
+        const importance = fields.importance ? IMPORTANCE.indexOf(fields.importance) : null;
+        const existing = find.get(accountId, remoteId);
+        if (existing) {
+          update.run(
+            folderId,
+            round,
+            threadId,
+            fields.subject ?? null,
+            fields.preview ?? null,
+            fields.from?.name ?? null,
+            fields.from?.address ?? null,
+            json(fields.to),
+            json(fields.cc),
+            fields.receivedAt ?? null,
+            flag(fields.isRead),
+            flag(fields.isFlagged),
+            flag(fields.isFocused),
+            flag(fields.hasAttachments),
+            importance,
+            existing.id as number,
+          );
+          changed.add(existing.folder_id as number);
+        } else {
+          insert.run(
+            accountId,
+            folderId,
+            threadId,
+            remoteId,
+            fields.subject ?? '',
+            fields.preview ?? '',
+            fields.from?.name ?? '',
+            fields.from?.address ?? '',
+            json(fields.to) ?? '[]',
+            json(fields.cc) ?? '[]',
+            fields.receivedAt ?? 0,
+            flag(fields.isRead) ?? 1,
+            flag(fields.isFlagged) ?? 0,
+            flag(fields.isFocused) ?? 1,
+            flag(fields.hasAttachments) ?? 0,
+            importance ?? 1,
+            round,
+          );
+        }
+        changed.add(folderId);
+      }
+      for (const remoteId of removedIds) {
+        if (remove.get(accountId, remoteId, folderId)) changed.add(folderId);
+      }
+      return [...changed];
+    });
   }
 
   saveBody(messageId: number, body: MessageBody, attachments: NewAttachment[]): void {

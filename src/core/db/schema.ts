@@ -109,4 +109,21 @@ export const MIGRATIONS: string[] = [
   CREATE UNIQUE INDEX accounts_by_remote_id ON accounts(provider, remote_id)
     WHERE remote_id IS NOT NULL;
   `,
+
+  // Header sync. sync_link is the address where the sync of a folder continues. sync_pending
+  // says whether pages are waiting there: 0 none, 1 a round from the start, 2 a round of changes.
+  // A message carries the round of its folder in which it was last seen, so a round from the
+  // start can remove what it did not meet. A message ID is unique per account, not per folder:
+  // it stays the same when the message moves.
+  `
+  ALTER TABLE folders ADD COLUMN sync_link TEXT;
+  ALTER TABLE folders ADD COLUMN sync_pending INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE folders ADD COLUMN sync_round INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE messages ADD COLUMN sync_round INTEGER NOT NULL DEFAULT 0;
+  DROP INDEX messages_by_remote_id;
+  CREATE UNIQUE INDEX messages_by_remote_id ON messages(account_id, remote_id)
+    WHERE remote_id IS NOT NULL;
+  CREATE UNIQUE INDEX threads_by_remote_id ON threads(account_id, remote_id)
+    WHERE remote_id IS NOT NULL;
+  `,
 ];

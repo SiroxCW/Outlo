@@ -7,6 +7,7 @@ import {
   MenuPopover,
   MenuTrigger,
   mergeClasses,
+  Spinner,
   tokens,
 } from '@fluentui/react-components';
 import {
@@ -24,7 +25,7 @@ import {
   SendRegular,
 } from '@fluentui/react-icons';
 import { useState, type ReactElement } from 'react';
-import type { Account, Folder, FolderRole } from '@shared/api';
+import type { Account, AccountSyncStatus, Folder, FolderRole } from '@shared/api';
 import type { Mailboxes } from '../core/useFolders';
 import { t } from '../i18n';
 
@@ -71,6 +72,24 @@ const useStyles = makeStyles({
   count: { paddingRight: '10px', fontSize: tokens.fontSizeBase200 },
   unread: { color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold },
   sectionRow: { display: 'flex', alignItems: 'center', paddingRight: '4px' },
+  status: {
+    padding: '2px 8px 4px 28px',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    overflowWrap: 'anywhere',
+  },
+  problem: { color: tokens.colorPaletteRedForeground1 },
+  link: {
+    display: 'block',
+    padding: 0,
+    border: 'none',
+    backgroundColor: 'transparent',
+    color: tokens.colorBrandForegroundLink,
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    cursor: 'pointer',
+    ':hover': { textDecorationLine: 'underline' },
+  },
   none: { padding: '4px 0 4px 28px', color: tokens.colorNeutralForeground3 },
   divider: { height: '1px', margin: '8px 8px 8px 0', backgroundColor: tokens.colorNeutralStroke2 },
 });
@@ -92,10 +111,13 @@ interface FolderPaneProps {
   // Missing in the demo, where accounts cannot be added or removed.
   onAddAccount?: () => void;
   onRemoveAccount?: (account: Account) => void;
+  syncStatus: AccountSyncStatus[];
 }
 
 export function FolderPane(props: FolderPaneProps) {
   const { mailboxes, selectedFolderId, onSelect, onAddAccount, onRemoveAccount } = props;
+  const stateOf = (account: Account) =>
+    props.syncStatus.find((status) => status.accountId === account.id);
   const styles = useStyles();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string) =>
@@ -124,6 +146,9 @@ export function FolderPane(props: FolderPaneProps) {
         </span>
         <span className={styles.name}>{label}</span>
       </button>
+      {account && stateOf(account)?.state === 'syncing' && (
+        <Spinner size="extra-tiny" aria-label={t('sync.syncing')} />
+      )}
       {account && onRemoveAccount && (
         <Menu>
           <MenuTrigger disableButtonEnhancement>
@@ -145,6 +170,25 @@ export function FolderPane(props: FolderPaneProps) {
       )}
     </div>
   );
+
+  // Says what keeps an account from being up to date. Nothing is shown while all is well.
+  const syncProblem = (account: Account) => {
+    const status = stateOf(account);
+    if (!status || status.state === 'idle' || status.state === 'syncing') return null;
+    if (status.state === 'offline') return <div className={styles.status}>{t('sync.offline')}</div>;
+    return (
+      <div className={mergeClasses(styles.status, styles.problem)}>
+        {status.state === 'signInNeeded' && t('sync.signInNeeded')}
+        {status.state === 'noMailbox' && t('sync.noMailbox')}
+        {status.state === 'error' && `${t('sync.error')} ${status.message ?? ''}`}
+        {status.state === 'signInNeeded' && onAddAccount && (
+          <button type="button" className={styles.link} onClick={onAddAccount}>
+            {t('sync.signIn')}
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const folderRow = (folder: Folder, depth: number, label = folder.name, key = `f${folder.id}`) => {
     // Drafts and junk show how many messages they hold, the others how many are unread.
@@ -199,6 +243,7 @@ export function FolderPane(props: FolderPaneProps) {
       {mailboxes.accounts.map((account) => (
         <div key={account.id}>
           {section(`account${account.id}`, account.email, account)}
+          {syncProblem(account)}
           {!collapsed.has(`account${account.id}`) &&
             (children(null, account.id).length > 0 ? (
               tree(account.id, null, 0)

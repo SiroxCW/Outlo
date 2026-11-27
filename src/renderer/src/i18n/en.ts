@@ -38,6 +38,12 @@ export const en = {
   'folders.favorites': 'Favorites',
   'folders.addAccount': 'Add account',
   'folders.none': 'No folders yet',
+  'sync.syncing': 'Synchronizing',
+  'sync.offline': 'Offline. Trying again shortly.',
+  'sync.signInNeeded': 'The sign-in has expired.',
+  'sync.signIn': 'Sign in again',
+  'sync.noMailbox': 'This account has no Microsoft mailbox.',
+  'sync.error': 'Synchronizing failed:',
   'folders.accountMenu': 'Account options',
   'folders.removeAccount': 'Remove account',
 
@@ -97,6 +103,7 @@ export const en = {
   'reading.cc': 'Cc:',
   'reading.noSubject': '(No subject)',
   'reading.loading': 'Loading message',
+  'reading.previewOnly': 'Only the beginning of this message is available so far.',
 
   'error.core': 'The core process does not answer',
 } as const;
