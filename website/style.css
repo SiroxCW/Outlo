@@ -27,8 +27,13 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family:
-    'Segoe UI', 'Segoe UI Web (West European)', -apple-system, BlinkMacSystemFont, Roboto,
-    'Helvetica Neue', sans-serif;
+    'Segoe UI',
+    'Segoe UI Web (West European)',
+    -apple-system,
+    BlinkMacSystemFont,
+    Roboto,
+    'Helvetica Neue',
+    sans-serif;
   font-size: 15px;
   line-height: 1.5;
 }
