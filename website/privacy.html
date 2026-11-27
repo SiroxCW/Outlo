@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy policy - outlook-for-linux</title>
+    <meta name="description" content="How outlook-for-linux handles your data." />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="site-name" href="./">outlook-for-linux</a>
+      <nav>
+        <a href="privacy.html">Privacy policy</a>
+        <a href="https://github.com/SiroxCW/outlook-for-linux">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>Privacy policy</h1>
+      <p>Last updated: 27 November 2026</p>
+
+      <p class="notice">
+        The app is still in development. This policy describes how it is built to work. We will
+        update it before the first release if anything changes.
+      </p>
+
+      <h2>In short</h2>
+      <ul>
+        <li>outlook-for-linux runs on your computer and talks directly to your mail provider.</li>
+        <li>Your mail is stored on your computer. We never receive it.</li>
+        <li>We run no servers that collect data from the app.</li>
+        <li>The app has no telemetry, no analytics and no ads.</li>
+      </ul>
+
+      <h2>Who we are</h2>
+      <p>
+        outlook-for-linux is an open source project developed by volunteers. "We" means the
+        maintainers of the project. You can reach us through the
+        <a href="https://github.com/SiroxCW/outlook-for-linux/issues">issue tracker on GitHub</a>.
+      </p>
+
+      <h2>What the app accesses</h2>
+      <p>
+        When you add an account, you sign in at your provider (for example Microsoft or Google) or
+        enter the details of your mail server. With your permission the app can then read and change
+        the following data of that account:
+      </p>
+      <ul>
+        <li>messages, folders and attachments</li>
+        <li>mailbox settings such as your time zone and automatic replies</li>
+        <li>your name and email address, to label the account in the app</li>
+        <li>calendars and contacts, once you use those parts of the app</li>
+      </ul>
+      <p>
+        The app uses this data for one purpose only: to show your mail to you and to carry out what
+        you do in the app, such as sending, moving or deleting a message.
+      </p>
+
+      <h2>Where your data is stored</h2>
+      <ul>
+        <li>
+          The app keeps a copy of your mail in a database in your home directory, so that it works
+          offline and search is fast.
+        </li>
+        <li>
+          Passwords and sign-in tokens are stored encrypted with the keyring of your desktop (for
+          example GNOME Keyring or KWallet). If your system has no keyring, the app warns you.
+        </li>
+        <li>
+          When you remove an account from the app, the local copy of its data and its sign-in tokens
+          are deleted from your computer. Your mail at the provider is not touched.
+        </li>
+      </ul>
+
+      <h2>Accounts in web mode</h2>
+      <p>
+        Some organizations do not allow other mail apps to access their mailboxes. For such an
+        account the app can show Outlook on the web instead. In this mode:
+      </p>
+      <ul>
+        <li>You use Microsoft's own web app in a separate, isolated part of the app.</li>
+        <li>The app does not copy the mail of that account into its database.</li>
+        <li>
+          The cookies of that sign-in are stored on your computer. They are deleted when you remove
+          the account.
+        </li>
+        <li>For the web app itself, the privacy terms of Microsoft and of your organization apply.</li>
+      </ul>
+
+      <h2>Who receives your data</h2>
+      <p>
+        Nobody except your own mail provider. We have no access to your accounts, your mail or your
+        passwords. We do not sell, share or transfer your data, and we do not use it for advertising
+        or to train AI models.
+      </p>
+
+      <h2>Connections the app makes</h2>
+      <ul>
+        <li>To the providers of the accounts you added, to sign in and to synchronize your data.</li>
+        <li>
+          To servers named in an email, but only if you allow it. Remote images are blocked by
+          default, because they can be used to track whether you opened a message.
+        </li>
+        <li>
+          To GitHub, to look for a new version. This applies only to the AppImage build. All other
+          builds are updated by your package manager.
+        </li>
+      </ul>
+      <p>Links that you click in an email open in your web browser, not in the app.</p>
+
+      <h2>Google user data</h2>
+      <p>
+        If you add a Google account, the app accesses your Gmail data only on your computer and only
+        to provide the mail features described above. The use of information received from Google
+        APIs adheres to the
+        <a href="https://developers.google.com/terms/api-services-user-data-policy"
+          >Google API Services User Data Policy</a
+        >, including the Limited Use requirements.
+      </p>
+
+      <h2>This website</h2>
+      <p>
+        This website is hosted by GitHub Pages. GitHub may log technical data such as your IP
+        address when you visit it, as described in the
+        <a
+          href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement"
+          >GitHub privacy statement</a
+        >. We set no cookies, use no analytics and load nothing from other servers.
+      </p>
+
+      <h2>Changes to this policy</h2>
+      <p>
+        When this policy changes, we update the date at the top. Every earlier version stays
+        available in the
+        <a href="https://github.com/SiroxCW/outlook-for-linux/commits/main/website/privacy.html"
+          >history of this file on GitHub</a
+        >.
+      </p>
+    </main>
+
+    <footer>
+      <p>
+        outlook-for-linux is an independent project. It is not affiliated with, endorsed by or
+        sponsored by Microsoft. Outlook and Microsoft are trademarks of the Microsoft group of
+        companies.
+      </p>
+    </footer>
+  </body>
+</html>
