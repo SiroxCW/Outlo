@@ -126,4 +126,15 @@ export const MIGRATIONS: string[] = [
   CREATE UNIQUE INDEX threads_by_remote_id ON threads(account_id, remote_id)
     WHERE remote_id IS NOT NULL;
   `,
+
+  // Pictures that a message shows inside its text are kept, so the message reads the same
+  // offline. content_id is the name by which the text refers to a picture. Other attachments
+  // are fetched when the user opens or saves them.
+  `
+  ALTER TABLE attachments ADD COLUMN content_id TEXT;
+  CREATE TABLE attachment_contents (
+    attachment_id INTEGER PRIMARY KEY REFERENCES attachments(id) ON DELETE CASCADE,
+    content BLOB NOT NULL
+  ) STRICT;
+  `,
 ];

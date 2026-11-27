@@ -144,6 +144,25 @@ describe('schema', () => {
     expect(() => insert(2)).toThrow();
   });
 
+  it('upgrades a version 3 database and removes stored pictures with their message', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    migrate(db, MIGRATIONS.slice(0, 3));
+    db.exec(`
+      INSERT INTO accounts (id, provider, email, display_name) VALUES (1, 'demo', 'a', 'A');
+      INSERT INTO folders (id, account_id, name) VALUES (1, 1, 'One');
+      INSERT INTO messages (id, account_id, folder_id, received_at) VALUES (1, 1, 1, 5);
+      INSERT INTO attachments (id, message_id, name) VALUES (1, 1, 'old.png');
+    `);
+    migrate(db);
+    expect(db.prepare('SELECT name, content_id FROM attachments').all()).toEqual([
+      { name: 'old.png', content_id: null },
+    ]);
+    db.exec("INSERT INTO attachment_contents (attachment_id, content) VALUES (1, x'0102')");
+    db.exec('DELETE FROM messages WHERE id = 1');
+    expect(db.prepare('SELECT count(*) AS n FROM attachment_contents').get()).toEqual({ n: 0 });
+  });
+
   it('does not allow the same account of a provider twice', () => {
     const db = new DatabaseSync(':memory:');
     migrate(db);

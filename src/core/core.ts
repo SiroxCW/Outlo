@@ -1,4 +1,6 @@
+import { writeFile } from 'node:fs/promises';
 import {
+  MAX_IMAGE_URLS,
   MAX_PAGE_SIZE,
   MAX_TIME_BOUNDARIES,
   type CoreEvents,
@@ -12,6 +14,7 @@ import { openDatabase } from './db/database';
 import { createDemoBody } from './demo/body';
 import { DEFAULT_DEMO_OPTIONS, DemoSeeder, type DemoOptions } from './demo/seeder';
 import type { Fetch } from './graph/client';
+import { RemoteImages, type ImageLoader } from './mail/remote-images';
 import { MailStore } from './mail/store';
 import { SyncEngine } from './sync/engine';
 import * as check from './validate';
@@ -26,6 +29,8 @@ export interface CoreOptions {
   demo?: Partial<DemoOptions>;
   // How the core reaches mail servers. Electron's network stack in the app, a fake in tests.
   fetch?: Fetch;
+  // How pictures from the internet are fetched. Without it none are.
+  loadImage?: ImageLoader;
 }
 
 // The core without any Electron code, so tests can run it under plain Node.
@@ -36,6 +41,17 @@ export function createCore(options: CoreOptions) {
   let closed = false;
   let seeding: Promise<void> = Promise.resolve();
   let engine: SyncEngine | undefined;
+  const remoteImages = options.loadImage ? new RemoteImages(options.loadImage) : undefined;
+
+  // Headers first, bodies later: the text of a demo message is made up when it is opened.
+  function getMessage(messageId: number) {
+    const message = store.getMessage(messageId);
+    if (!message || message.body) return message;
+    if (store.getAccount(message.accountId)?.provider !== 'demo') return message;
+    const { body, attachments } = createDemoBody(message);
+    store.saveBody(messageId, body, attachments);
+    return store.getMessage(messageId);
+  }
 
   const server = createServer<CoreRequests, CoreEvents>({
     'core.info': () => ({ pid: process.pid, startedAt, nodeVersion: process.versions.node }),
@@ -62,18 +78,23 @@ export function createCore(options: CoreOptions) {
       );
     },
 
-    'messages.get': (params) => {
-      const messageId = check.id(check.record(params, 'params').id, 'id');
-      const message = store.getMessage(messageId);
-      if (!message || message.body) return message;
+    'messages.get': (params) => getMessage(check.id(check.record(params, 'params').id, 'id')),
 
-      // Headers first, bodies later: a body is fetched when the message is opened.
-      if (store.getAccount(message.accountId)?.provider === 'demo') {
-        const { body, attachments } = createDemoBody(message);
-        store.saveBody(messageId, body, attachments);
-        return store.getMessage(messageId);
-      }
-      return message;
+    'messages.loadBody': async (params) => {
+      const messageId = check.id(check.record(params, 'params').id, 'id');
+      await engine?.loadBody(messageId);
+      return getMessage(messageId);
+    },
+
+    'images.fetch': async (params) => {
+      const input = check.record(params, 'params');
+      const content = store.getBodyContent(check.id(input.messageId, 'messageId'));
+      if (!remoteImages || content === null) return {};
+      // The UI cannot use this to fetch arbitrary addresses: they have to occur in the message.
+      const urls = check
+        .textList(input.urls, 'urls', MAX_IMAGE_URLS, 4000)
+        .filter((url) => content.includes(url) || content.includes(url.replaceAll('&', '&amp;')));
+      return remoteImages.fetch(urls);
     },
 
     'messages.search': (params) => {
@@ -143,6 +164,24 @@ export function createCore(options: CoreOptions) {
       server.emit('folders.changed', undefined);
       engine?.refresh();
       return { remoteId };
+    },
+
+    'attachments.info': (params) => {
+      const found = store.getAttachment(check.id(check.record(params, 'params').id, 'id'));
+      return found && { name: found.name, size: found.size, contentType: found.contentType };
+    },
+
+    'attachments.download': async (params) => {
+      const input = check.record(params, 'params');
+      const id = check.id(input.id, 'id');
+      const path = check.text(input.path, 'path', 4096);
+      const attachment = store.getAttachment(id);
+      if (!attachment) throw new Error('The attachment does not exist any more');
+      // Never executable, and readable by the user only.
+      if (attachment.content) await writeFile(path, attachment.content, { mode: 0o600 });
+      else if (engine) await engine.downloadAttachment(attachment, path);
+      else throw new Error('This attachment has no content that could be saved');
+      return undefined;
     },
   });
 

@@ -3,6 +3,7 @@ const GRAPH = `${GRAPH_ORIGIN}/v1.0`;
 const MAX_ATTEMPTS = 5;
 const MAX_WAIT = 5 * 60 * 1000;
 const REQUEST_TIMEOUT = 60 * 1000;
+const DOWNLOAD_TIMEOUT = 15 * 60 * 1000;
 
 export class GraphError extends Error {
   constructor(
@@ -65,13 +66,23 @@ export class GraphClient {
 
   // The path is relative to the v1.0 root, or a complete address from an earlier answer.
   async request<Result>(path: string, request: GraphRequest = {}): Promise<Result> {
+    const response = await this.limited(() => this.send(path, request, REQUEST_TIMEOUT));
+    return (await response.json()) as Result;
+  }
+
+  // For file contents: the answer is handed out as it is, so it can be read piece by piece.
+  download(path: string): Promise<Response> {
+    return this.limited(() => this.send(path, {}, DOWNLOAD_TIMEOUT));
+  }
+
+  private async limited<Result>(run: () => Promise<Result>): Promise<Result> {
     if (this.running >= this.maxParallel) {
       await new Promise<void>((resolve) => this.waiting.push(resolve));
     } else {
       this.running++;
     }
     try {
-      return await this.send<Result>(path, request);
+      return await run();
     } finally {
       // A waiting request takes over the slot, so the count only drops when nobody waits.
       const next = this.waiting.shift();
@@ -80,7 +91,7 @@ export class GraphClient {
     }
   }
 
-  private async send<Result>(path: string, request: GraphRequest): Promise<Result> {
+  private async send(path: string, request: GraphRequest, timeout: number): Promise<Response> {
     const url = path.startsWith('/') ? GRAPH + path : path;
     // Addresses from earlier answers are followed, but the token only ever goes to Graph.
     if (!url.startsWith(`${GRAPH_ORIGIN}/`)) {
@@ -103,13 +114,13 @@ export class GraphClient {
             ...(request.body === undefined ? {} : { 'Content-Type': 'application/json' }),
           },
           body: request.body === undefined ? undefined : JSON.stringify(request.body),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+          signal: AbortSignal.timeout(timeout),
         });
       } catch (error) {
         throw new OfflineError(error instanceof Error ? error.message : String(error));
       }
 
-      if (response.ok) return (await response.json()) as Result;
+      if (response.ok) return response;
 
       // The token may have been revoked before its time. Try once with a new one.
       if (response.status === 401 && !refreshed) {

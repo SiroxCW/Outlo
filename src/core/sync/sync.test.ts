@@ -405,3 +405,135 @@ describe('problems', () => {
     expect(store.getMessage(message!.id)).toMatchObject({ isRead: false, isFlagged: false });
   });
 });
+
+describe('message texts', () => {
+  const picture = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
+
+  it('fetches the texts of recent mail ahead, newest first, and then comes to rest', async () => {
+    const recent = (days: number) => new Date(now - days * 86_400_000).toISOString();
+    const old = graph.addMessage(inbox, { subject: 'Old', receivedDateTime: recent(45) });
+    const first = graph.addMessage(inbox, { subject: 'Newest', receivedDateTime: recent(1) });
+    graph.addMessage(inbox, { subject: 'Recent', receivedDateTime: recent(20) });
+    graph.setBody(first, 'text', 'Plain words');
+    const sync = createSync();
+    await settle(sync);
+
+    const stored = (subject: string) => {
+      const id = store.search(subject, 1)[0]!.id;
+      return store.getMessage(id)!.body;
+    };
+    expect(stored('Newest')).toEqual({ contentType: 'text', content: 'Plain words' });
+    expect(stored('Recent')?.contentType).toBe('html');
+    expect(stored('Old')).toBeNull();
+    expect(sync.status().state).toBe('idle');
+
+    const texts = graph.requests.filter((request) => request.startsWith('GET /me/messages/'));
+    expect(texts[0]).toBe(`GET /me/messages/${first}`);
+    expect(texts).not.toContain(`GET /me/messages/${old}`);
+  });
+
+  it('stores attachments, and keeps the pictures that the text shows', async () => {
+    const id = graph.addMessage(inbox, {
+      subject: 'Pictures',
+      receivedDateTime: new Date(now).toISOString(),
+    });
+    graph.setBody(id, 'html', '<p>Logo: <img src="cid:logo@x"> and <img src="cid:missing"></p>');
+    graph.addAttachment(id, {
+      name: 'logo.png',
+      contentType: 'image/png',
+      content: picture,
+      isInline: true,
+      contentId: '<logo@x>',
+    });
+    graph.addAttachment(id, {
+      name: 'unused.png',
+      contentType: 'image/png',
+      content: picture,
+      isInline: true,
+      contentId: 'unused@x',
+    });
+    graph.addAttachment(id, {
+      name: 'vector.svg',
+      contentType: 'image/svg+xml',
+      content: picture,
+      isInline: true,
+      contentId: 'missing',
+    });
+    graph.addAttachment(id, {
+      name: 'report.pdf',
+      contentType: 'application/pdf',
+      content: picture,
+    });
+    graph.addAttachment(id, {
+      name: 'cloud file',
+      contentType: 'x',
+      content: picture,
+      type: 'referenceAttachment',
+    });
+    await settle(createSync());
+
+    const message = store.getMessage(store.search('Pictures', 1)[0]!.id)!;
+    expect(message.attachments.map((entry) => [entry.name, entry.contentId, entry.size])).toEqual([
+      ['logo.png', 'logo@x', 7],
+      ['unused.png', 'unused@x', 7],
+      ['vector.svg', 'missing', 7],
+      ['report.pdf', null, 7],
+    ]);
+    expect(message.inlineImages).toEqual([
+      {
+        contentId: 'logo@x',
+        dataUrl: `data:image/png;base64,${Buffer.from(picture).toString('base64')}`,
+      },
+    ]);
+    // Only the one picture that is shown was downloaded.
+    expect(graph.requests.filter((request) => request.endsWith('/$value'))).toHaveLength(1);
+  });
+
+  it('does not ask for attachments when a message has none', async () => {
+    const id = graph.addMessage(inbox, { receivedDateTime: new Date(now).toISOString() });
+    await settle(createSync());
+    expect(graph.requests).toContain(`GET /me/messages/${id}`);
+    expect(graph.requests).not.toContain(`GET /me/messages/${id}/attachments`);
+  });
+
+  it('skips a text that cannot be fetched and goes on with the others', async () => {
+    const broken = graph.addMessage(inbox, {
+      subject: 'Broken',
+      receivedDateTime: new Date(now).toISOString(),
+    });
+    graph.addMessage(inbox, {
+      subject: 'Fine',
+      receivedDateTime: new Date(now - 1000).toISOString(),
+    });
+    graph.intercept = (url) =>
+      url.pathname.endsWith(`/messages/${broken}`)
+        ? new Response(JSON.stringify({ error: { code: 'ErrorItemNotFound', message: 'Gone' } }), {
+            status: 404,
+          })
+        : undefined;
+    const sync = createSync();
+    await settle(sync);
+    expect(sync.status().state).toBe('idle');
+    expect(store.getMessage(store.search('Fine', 1)[0]!.id)!.body).not.toBeNull();
+    expect(
+      graph.requests.filter((request) => request.endsWith(`/messages/${broken}`)),
+    ).toHaveLength(1);
+  });
+
+  it('fetches the text again when the message changed', async () => {
+    const id = graph.addMessage(inbox, {
+      subject: 'Draft',
+      bodyPreview: 'First',
+      receivedDateTime: new Date(now).toISOString(),
+    });
+    graph.setBody(id, 'text', 'First version');
+    const sync = createSync();
+    await settle(sync);
+
+    graph.updateMessage(inbox, id, { bodyPreview: 'Second' });
+    graph.setBody(id, 'text', 'Second version');
+    now += 31_000;
+    await settle(sync);
+    expect(store.getMessage(store.search('Draft', 1)[0]!.id)!.body?.content).toBe('Second version');
+  });
+});

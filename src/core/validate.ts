@@ -54,3 +54,15 @@ export function idList(value: unknown, name: string, maxLength: number): number[
   }
   return value.map((entry) => id(entry, name));
 }
+
+export function textList(
+  value: unknown,
+  name: string,
+  maxLength: number,
+  maxTextLength: number,
+): string[] {
+  if (!Array.isArray(value) || value.length > maxLength) {
+    throw new Error(`${name} must be a list of at most ${maxLength} texts`);
+  }
+  return value.map((entry, index) => text(entry, `${name}[${index}]`, maxTextLength));
+}

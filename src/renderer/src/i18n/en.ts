@@ -103,7 +103,17 @@ export const en = {
   'reading.cc': 'Cc:',
   'reading.noSubject': '(No subject)',
   'reading.loading': 'Loading message',
-  'reading.previewOnly': 'Only the beginning of this message is available so far.',
+  'reading.previewOnly': 'Only the beginning of this message is available.',
+  'reading.loadingText': 'Loading the message text',
+  'reading.textFailed': 'The message text could not be loaded.',
+  'reading.retry': 'Try again',
+  'reading.picturesBlocked': 'Pictures from the internet were not loaded, to protect your privacy.',
+  'reading.showPictures': 'Show pictures',
+  'attachment.open': 'Open',
+  'attachment.save': 'Save as',
+  'attachment.blocked':
+    'Files of this type can run programs, so they are not opened straight from a mail. Save the file first if you trust the sender.',
+  'attachment.failed': 'That did not work:',
 
   'error.core': 'The core process does not answer',
 } as const;

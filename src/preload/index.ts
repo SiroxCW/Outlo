@@ -4,6 +4,8 @@ import {
   ACCOUNTS_ADD_MICROSOFT,
   ACCOUNTS_CANCEL_ADD,
   ACCOUNTS_REMOVE,
+  ATTACHMENTS_OPEN,
+  ATTACHMENTS_SAVE,
   CORE_PORT_REQUEST,
   SESSION_GET_INFO,
   SESSION_SET_DEMO,
@@ -48,6 +50,10 @@ const bridge: OutloBridge = {
     addMicrosoft: () => ipcRenderer.invoke(ACCOUNTS_ADD_MICROSOFT),
     cancelAdd: () => ipcRenderer.send(ACCOUNTS_CANCEL_ADD),
     remove: (accountId) => ipcRenderer.invoke(ACCOUNTS_REMOVE, accountId),
+  },
+  attachments: {
+    open: (attachmentId) => ipcRenderer.invoke(ATTACHMENTS_OPEN, attachmentId),
+    save: (attachmentId) => ipcRenderer.invoke(ATTACHMENTS_SAVE, attachmentId),
   },
   session: {
     getInfo: () => ipcRenderer.invoke(SESSION_GET_INFO),

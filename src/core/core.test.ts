@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   CoreEvent,
@@ -335,5 +338,174 @@ describe('mail sync', () => {
     await client.request('sync.now', undefined);
     await settle();
     expect(graph.requests).toHaveLength(before);
+  });
+});
+
+describe('message texts and attachments', () => {
+  const picture = new Uint8Array([137, 80, 78, 71, 9]);
+  const account = {
+    provider: 'graph',
+    remoteId: 'home-1',
+    email: 'a@b.example',
+    displayName: 'A',
+  } as const;
+
+  async function startWithMail(html: string) {
+    const graph = new FakeGraph();
+    const inbox = graph.addFolder('Inbox', { wellKnown: 'inbox' });
+    // Old enough that the text is not fetched ahead, so the test decides when it is.
+    const remoteId = graph.addMessage(inbox, {
+      subject: 'Old mail',
+      receivedDateTime: '2020-01-01T00:00:00Z',
+    });
+    graph.setBody(remoteId, 'html', html);
+
+    const loaded: string[] = [];
+    const core = createCore({
+      databasePath: ':memory:',
+      fetch: graph.fetch,
+      loadImage: async (url) => {
+        loaded.push(url);
+        return { contentType: 'image/png', data: picture };
+      },
+    });
+    cores.push(core);
+    const [uiSide, coreSide] = createEndpointPair();
+    core.connect(coreSide);
+    const client = createClient<CoreRequests, CoreEvents>(uiSide);
+    const [hostSide, hostCoreSide] = createEndpointPair();
+    core.connectHost(hostCoreSide);
+    const host = createClient<HostRequests>(hostSide);
+    const [serviceSide, serviceCoreSide] = createEndpointPair();
+    createServer<HostServices, Record<string, never>>({
+      'auth.getToken': () => ({
+        status: 'ok',
+        accessToken: 't',
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    }).connect(serviceSide);
+    core.connectServices(serviceCoreSide);
+
+    await host.request('accounts.add', account);
+    for (let tries = 0; ; tries++) {
+      const [status] = await client.request('sync.status', undefined);
+      if (status?.state === 'idle') break;
+      if (tries > 200) throw new Error('The sync did not finish');
+      await settle();
+    }
+    const [folder] = await client.request('folders.list', undefined);
+    const page = await client.request('messages.list', {
+      folderId: folder!.id,
+      filter: 'all',
+      offset: 0,
+      limit: 1,
+    });
+    return { graph, client, host, remoteId, id: page.messages[0]!.id, loaded };
+  }
+
+  it('loads the text when asked, and only once', async () => {
+    const { graph, client, id, remoteId } = await startWithMail('<p>Hello</p>');
+    expect((await client.request('messages.get', { id }))?.body).toBeNull();
+
+    const [first, second] = await Promise.all([
+      client.request('messages.loadBody', { id }),
+      client.request('messages.loadBody', { id }),
+    ]);
+    expect(first?.body).toEqual({ contentType: 'html', content: '<p>Hello</p>' });
+    expect(second?.body).toEqual(first?.body);
+    await client.request('messages.loadBody', { id });
+    expect(
+      graph.requests.filter((request) => request === `GET /me/messages/${remoteId}`),
+    ).toHaveLength(1);
+    expect((await client.request('messages.get', { id }))?.body).not.toBeNull();
+  });
+
+  it('reports when the text cannot be loaded', async () => {
+    const { graph, client, id } = await startWithMail('<p>Hello</p>');
+    graph.offline = true;
+    await expect(client.request('messages.loadBody', { id })).rejects.toThrow();
+    expect(await client.request('messages.loadBody', { id: 9999 })).toBeNull();
+  });
+
+  it('fetches internet pictures only for addresses that occur in the message', async () => {
+    const html =
+      '<img src="https://news.example.com/a.png?x=1&amp;y=2"><img src="http://192.168.0.1/b.png">';
+    const { client, id, loaded } = await startWithMail(html);
+    expect(
+      await client.request('images.fetch', {
+        messageId: id,
+        urls: ['https://news.example.com/a.png?x=1&y=2'],
+      }),
+    ).toEqual({});
+
+    await client.request('messages.loadBody', { id });
+    const result = await client.request('images.fetch', {
+      messageId: id,
+      urls: [
+        'https://news.example.com/a.png?x=1&y=2',
+        'https://other.example.com/not-in-the-mail.png',
+        'http://192.168.0.1/b.png',
+      ],
+    });
+    expect(Object.keys(result)).toEqual(['https://news.example.com/a.png?x=1&y=2']);
+    expect(loaded).toEqual(['https://news.example.com/a.png?x=1&y=2']);
+  });
+
+  it('writes attachments to the file the main process names', async () => {
+    const { graph, client, host, id, remoteId } = await startWithMail('<img src="cid:logo">');
+    const large = new Uint8Array(300_000).map((_, index) => index % 251);
+    graph.addAttachment(remoteId, {
+      name: 'logo.png',
+      contentType: 'image/png',
+      content: picture,
+      isInline: true,
+      contentId: 'logo',
+    });
+    graph.addAttachment(remoteId, {
+      name: 'data.bin',
+      contentType: 'application/octet-stream',
+      content: large,
+    });
+    const message = await client.request('messages.loadBody', { id });
+    const [logo, data] = message!.attachments;
+
+    expect(await host.request('attachments.info', { id: data!.id })).toEqual({
+      name: 'data.bin',
+      size: 300_000,
+      contentType: 'application/octet-stream',
+    });
+    expect(await host.request('attachments.info', { id: 9999 })).toBeNull();
+
+    const directory = mkdtempSync(join(tmpdir(), 'outlo-attachments-'));
+    try {
+      await host.request('attachments.download', {
+        id: data!.id,
+        path: join(directory, 'data.bin'),
+      });
+      await host.request('attachments.download', {
+        id: logo!.id,
+        path: join(directory, 'logo.png'),
+      });
+      expect(readFileSync(join(directory, 'data.bin')).equals(Buffer.from(large))).toBe(true);
+      expect(readFileSync(join(directory, 'logo.png')).equals(Buffer.from(picture))).toBe(true);
+      expect(statSync(join(directory, 'data.bin')).mode & 0o777).toBe(0o600);
+
+      graph.offline = true;
+      const failed = join(directory, 'failed.bin');
+      await expect(
+        host.request('attachments.download', { id: data!.id, path: failed }),
+      ).rejects.toThrow();
+      expect(existsSync(failed)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not offer attachment files to the UI', async () => {
+    const { client } = await startWithMail('<p>x</p>');
+    const raw = client.request as (method: string, params: unknown) => Promise<unknown>;
+    await expect(raw('attachments.download', { id: 1, path: '/tmp/x' })).rejects.toThrow(
+      'Unknown method',
+    );
   });
 });

@@ -10,6 +10,15 @@ interface FakeFolder {
   messages: Map<string, GraphMessage>;
 }
 
+export interface FakeAttachment {
+  name: string;
+  contentType: string;
+  content: Uint8Array;
+  isInline?: boolean;
+  contentId?: string;
+  type?: string;
+}
+
 interface Change {
   seq: number;
   folderId: string;
@@ -32,6 +41,8 @@ export class FakeGraph {
   offline = false;
   private readonly folders = new Map<string, FakeFolder>();
   private readonly changes: Change[] = [];
+  private readonly bodies = new Map<string, { contentType: string; content: string }>();
+  private readonly attachments = new Map<string, (FakeAttachment & { id: string })[]>();
   private seq = 0;
   private oldestValidSeq = 0;
   private nextId = 1;
@@ -79,6 +90,19 @@ export class FakeGraph {
       id,
     });
     this.record(folderId, id);
+    return id;
+  }
+
+  setBody(messageId: string, contentType: 'html' | 'text', content: string): void {
+    this.bodies.set(messageId, { contentType, content });
+  }
+
+  addAttachment(messageId: string, attachment: FakeAttachment): string {
+    const id = `attachment-${this.nextId++}`;
+    this.attachments.set(messageId, [
+      ...(this.attachments.get(messageId) ?? []),
+      { ...attachment, id },
+    ]);
     return id;
   }
 
@@ -145,8 +169,40 @@ export class FakeGraph {
       const size = Number(/odata\.maxpagesize=(\d+)/.exec(headers.Prefer)?.[1] ?? 10);
       return this.messageDelta(url, messages[1]!, size);
     }
+    const single = /^\/me\/messages\/([^/]+)(\/attachments(?:\/([^/]+)\/\$value)?)?$/.exec(path);
+    if (single) return this.message(single[1]!, single[2] !== undefined, single[3]);
     return failure(404, 'Test', `The fake does not know ${path}`);
   };
+
+  private message(id: string, wantsAttachments: boolean, attachmentId?: string): Response {
+    const exists = [...this.folders.values()].some((folder) => folder.messages.has(id));
+    if (!exists) return failure(404, 'ErrorItemNotFound', 'The message does not exist');
+    const attachments = this.attachments.get(id) ?? [];
+    if (attachmentId) {
+      const found = attachments.find((entry) => entry.id === attachmentId);
+      return found
+        ? new Response(found.content as BodyInit, {
+            headers: { 'Content-Type': found.contentType },
+          })
+        : failure(404, 'ErrorItemNotFound', 'The attachment does not exist');
+    }
+    if (wantsAttachments) {
+      const value = attachments.map((entry) => ({
+        '@odata.type': `#microsoft.graph.${entry.type ?? 'fileAttachment'}`,
+        id: entry.id,
+        name: entry.name,
+        contentType: entry.contentType,
+        size: entry.content.byteLength,
+        isInline: entry.isInline ?? false,
+        contentId: entry.contentId ?? null,
+      }));
+      return json(200, { value });
+    }
+    const body = this.bodies.get(id) ?? { contentType: 'html', content: `<p>Text of ${id}</p>` };
+    // As with Graph, pictures inside the text alone do not count as attachments.
+    const hasAttachments = attachments.some((entry) => !entry.isInline);
+    return json(200, { id, body, hasAttachments });
+  }
 
   private toFolder(folder: FakeFolder): GraphFolder {
     const children = [...this.folders.values()].filter((entry) => entry.parentId === folder.id);

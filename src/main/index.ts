@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { app, BrowserWindow, session } from 'electron';
 import { handleAccountRequests } from './accounts';
 import { handleAppProtocol, registerAppScheme } from './app-protocol';
+import { handleAttachmentRequests } from './attachments';
 import { startCore } from './core-process';
 import { getMicrosoftToken } from './microsoft/sign-in';
 import { hardenSession, hardenWebContents } from './security';
@@ -44,5 +45,6 @@ void app.whenReady().then(() => {
   });
   handleWindowRequests();
   handleAccountRequests();
+  handleAttachmentRequests();
   createMainWindow();
 });

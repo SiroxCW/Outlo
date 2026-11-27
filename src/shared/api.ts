@@ -57,6 +57,14 @@ export interface Attachment {
   contentType: string;
   size: number;
   isInline: boolean;
+  // The name by which the text of the message refers to this attachment, as in "cid:name".
+  contentId: string | null;
+}
+
+// A picture that belongs to the text of a message, ready to be shown.
+export interface InlineImage {
+  contentId: string;
+  dataUrl: string;
 }
 
 export interface MessageBody {
@@ -66,8 +74,10 @@ export interface MessageBody {
 
 export interface Message extends MessageSummary {
   cc: Address[];
+  // The text as the sender wrote it. It is not safe to show before it was cleaned.
   body: MessageBody | null;
   attachments: Attachment[];
+  inlineImages: InlineImage[];
 }
 
 export type MessageFilter = 'all' | 'focused' | 'other';
@@ -113,6 +123,12 @@ export type CoreRequests = {
     result: number[];
   };
   'messages.get': { params: { id: number }; result: Message | null };
+  // Like messages.get, but fetches the text from the mail provider when it is not stored yet.
+  'messages.loadBody': { params: { id: number }; result: Message | null };
+  // Fetches pictures that the text of a message links to on the internet. Only addresses that
+  // occur in that message are fetched. The result maps each address to the picture as a data URL;
+  // what could not be fetched is left out.
+  'images.fetch': { params: { messageId: number; urls: string[] }; result: Record<string, string> };
   'messages.search': { params: { query: string; limit: number }; result: MessageSummary[] };
 
   'messages.setRead': { params: { ids: number[]; isRead: boolean }; result: undefined };
@@ -154,6 +170,12 @@ export type HostRequests = {
   };
   // Deletes the account with all its local data. Returns its ID at the provider.
   'accounts.remove': { params: { id: number }; result: { remoteId: string | null } };
+  'attachments.info': {
+    params: { id: number };
+    result: { name: string; size: number; contentType: string } | null;
+  };
+  // Writes the attachment to a file. The main process chooses the path, never the UI.
+  'attachments.download': { params: { id: number; path: string }; result: undefined };
 };
 
 export type TokenResult =
@@ -179,6 +201,19 @@ export interface AccountsBridge {
   addMicrosoft(): Promise<AddAccountResult>;
   cancelAdd(): void;
   remove(accountId: number): Promise<void>;
+}
+
+export type AttachmentResult =
+  | { status: 'done' }
+  | { status: 'cancelled' }
+  // Files that can run programs are not opened straight from a mail. They can be saved.
+  | { status: 'blocked' }
+  | { status: 'failed'; message: string };
+
+// Opening and saving attachments needs the main process: file dialogs and other programs.
+export interface AttachmentsBridge {
+  open(attachmentId: number): Promise<AttachmentResult>;
+  save(attachmentId: number): Promise<AttachmentResult>;
 }
 
 export interface SessionInfo {
@@ -215,11 +250,13 @@ export interface OutloBridge {
   subscribe(listener: (event: CoreEvent) => void): () => void;
   window: WindowBridge;
   accounts: AccountsBridge;
+  attachments: AttachmentsBridge;
   session: SessionBridge;
 }
 
 export const MAX_PAGE_SIZE = 500;
 export const MAX_TIME_BOUNDARIES = 32;
+export const MAX_IMAGE_URLS = 100;
 export const TITLE_BAR_HEIGHT = 48;
 
 export const WINDOW_GET_TITLE_BAR = 'window:get-title-bar';
@@ -228,6 +265,8 @@ export const WINDOW_SET_COLORS = 'window:set-colors';
 export const ACCOUNTS_ADD_MICROSOFT = 'accounts:add-microsoft';
 export const ACCOUNTS_CANCEL_ADD = 'accounts:cancel-add';
 export const ACCOUNTS_REMOVE = 'accounts:remove';
+export const ATTACHMENTS_OPEN = 'attachments:open';
+export const ATTACHMENTS_SAVE = 'attachments:save';
 export const SESSION_GET_INFO = 'session:get-info';
 export const SESSION_SET_DEMO = 'session:set-demo';
 

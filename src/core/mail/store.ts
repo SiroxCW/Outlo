@@ -6,6 +6,7 @@ import type {
   Folder,
   FolderRole,
   Importance,
+  InlineImage,
   Message,
   MessageBody,
   MessageFilter,
@@ -19,6 +20,9 @@ import { toFtsQuery } from './fts-query';
 type Row = Record<string, unknown>;
 
 const IMPORTANCE: Importance[] = ['low', 'normal', 'high'];
+
+// Picture types that are shown inside the text of a message. No SVG: it can carry scripts.
+export const INLINE_IMAGE_TYPES = /^image\/(png|jpeg|gif|webp|bmp)$/i;
 
 // Changes are not sent to a mail provider yet. Until then only mail without a provider can
 // change, or the app and the server would show different things.
@@ -81,6 +85,21 @@ export interface NewAttachment {
   contentType: string;
   size: number;
   isInline: boolean;
+  remoteId?: string;
+  contentId?: string | null;
+  // Only for pictures inside the text. They are stored with the message.
+  content?: Uint8Array;
+}
+
+// What is needed to fetch an attachment from its provider or to write it to a file.
+export interface StoredAttachment {
+  name: string;
+  contentType: string;
+  size: number;
+  accountId: number;
+  remoteId: string | null;
+  messageRemoteId: string | null;
+  content: Uint8Array | null;
 }
 
 function toAccount(row: Row): Account {
@@ -131,6 +150,7 @@ function toAttachment(row: Row): Attachment {
     contentType: row.content_type as string,
     size: row.size as number,
     isInline: row.is_inline === 1,
+    contentId: row.content_id as string | null,
   };
 }
 
@@ -215,14 +235,27 @@ export class MailStore {
       row.content === null
         ? null
         : { contentType: row.content_type as 'html' | 'text', content: row.content as string };
-    const attachments = this.sql('SELECT * FROM attachments WHERE message_id = ? ORDER BY id')
-      .all(id)
-      .map(toAttachment);
+    const rows = this.sql(
+      `SELECT a.*, c.content FROM attachments a
+       LEFT JOIN attachment_contents c ON c.attachment_id = a.id
+       WHERE a.message_id = ? ORDER BY a.id`,
+    ).all(id);
+    const inlineImages: InlineImage[] = [];
+    for (const entry of rows) {
+      const type = entry.content_type as string;
+      if (!entry.content || !entry.content_id || !INLINE_IMAGE_TYPES.test(type)) continue;
+      const base64 = Buffer.from(entry.content as Uint8Array).toString('base64');
+      inlineImages.push({
+        contentId: entry.content_id as string,
+        dataUrl: `data:${type.toLowerCase()};base64,${base64}`,
+      });
+    }
     return {
       ...toSummary(row),
       cc: JSON.parse(row.cc_recipients as string) as Address[],
       body,
-      attachments,
+      attachments: rows.map(toAttachment),
+      inlineImages,
     };
   }
 
@@ -235,6 +268,55 @@ export class MailStore {
     )
       .all(match, limit)
       .map(toSummary);
+  }
+
+  // The text of a message as it was received, or null when it is not stored.
+  getBodyContent(messageId: number): string | null {
+    const row = this.sql('SELECT content FROM message_bodies WHERE message_id = ?').get(messageId);
+    return row ? (row.content as string) : null;
+  }
+
+  // Where a message comes from. Null for messages without a provider, like demo mail.
+  getRemoteMessage(messageId: number): { accountId: number; remoteId: string } | null {
+    const row = this.sql(
+      'SELECT account_id, remote_id FROM messages WHERE id = ? AND remote_id IS NOT NULL',
+    ).get(messageId);
+    return row ? { accountId: row.account_id as number, remoteId: row.remote_id as string } : null;
+  }
+
+  // The newest messages of an account whose text is not stored yet.
+  listMessagesWithoutBody(
+    accountId: number,
+    since: number,
+    limit: number,
+  ): { id: number; remoteId: string }[] {
+    return this.sql(
+      `SELECT m.id, m.remote_id FROM messages m
+       WHERE m.account_id = ? AND m.remote_id IS NOT NULL AND m.received_at >= ?
+         AND NOT EXISTS (SELECT 1 FROM message_bodies b WHERE b.message_id = m.id)
+       ORDER BY m.received_at DESC LIMIT ?`,
+    )
+      .all(accountId, since, limit)
+      .map((row) => ({ id: row.id as number, remoteId: row.remote_id as string }));
+  }
+
+  getAttachment(id: number): StoredAttachment | null {
+    const row = this.sql(
+      `SELECT a.name, a.content_type, a.size, a.remote_id, m.account_id,
+         m.remote_id AS message_remote_id, c.content
+       FROM attachments a JOIN messages m ON m.id = a.message_id
+       LEFT JOIN attachment_contents c ON c.attachment_id = a.id WHERE a.id = ?`,
+    ).get(id);
+    if (!row) return null;
+    return {
+      name: row.name as string,
+      contentType: row.content_type as string,
+      size: row.size as number,
+      accountId: row.account_id as number,
+      remoteId: row.remote_id as string | null,
+      messageRemoteId: row.message_remote_id as string | null,
+      content: (row.content as Uint8Array | null) ?? null,
+    };
   }
 
   listSettings(prefix: string): Record<string, string> {
@@ -511,8 +593,9 @@ export class MailStore {
     removedIds: string[],
   ): number[] {
     const find = this.sql(
-      'SELECT id, folder_id FROM messages WHERE account_id = ? AND remote_id = ?',
+      'SELECT id, folder_id, preview FROM messages WHERE account_id = ? AND remote_id = ?',
     );
+    const dropBody = this.sql('DELETE FROM message_bodies WHERE message_id = ?');
     const thread = this.sql(
       `INSERT INTO threads (account_id, remote_id) VALUES (?, ?)
        ON CONFLICT (account_id, remote_id) WHERE remote_id IS NOT NULL
@@ -552,6 +635,10 @@ export class MailStore {
         const importance = fields.importance ? IMPORTANCE.indexOf(fields.importance) : null;
         const existing = find.get(accountId, remoteId);
         if (existing) {
+          // A new preview means the text changed, as with a draft. It is fetched again.
+          if (fields.preview !== undefined && fields.preview !== existing.preview) {
+            dropBody.run(existing.id as number);
+          }
           update.run(
             folderId,
             round,
@@ -610,16 +697,23 @@ export class MailStore {
       ).run(messageId, body.contentType, body.content);
       this.sql('DELETE FROM attachments WHERE message_id = ?').run(messageId);
       const insert = this.sql(
-        'INSERT INTO attachments (message_id, name, content_type, size, is_inline) VALUES (?, ?, ?, ?, ?)',
+        `INSERT INTO attachments (message_id, remote_id, name, content_type, size, is_inline,
+           content_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const keep = this.sql(
+        'INSERT INTO attachment_contents (attachment_id, content) VALUES (?, ?)',
       );
       for (const attachment of attachments) {
-        insert.run(
+        const result = insert.run(
           messageId,
+          attachment.remoteId ?? null,
           attachment.name,
           attachment.contentType,
           attachment.size,
           attachment.isInline ? 1 : 0,
+          attachment.contentId ?? null,
         );
+        if (attachment.content) keep.run(Number(result.lastInsertRowid), attachment.content);
       }
     });
   }

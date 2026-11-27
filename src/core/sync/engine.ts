@@ -1,6 +1,11 @@
+import { createWriteStream } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream } from 'node:stream/web';
 import type { AccountSyncStatus, HostServices } from '@shared/api';
 import { GraphClient, OfflineError, SignInNeededError, type Fetch } from '../graph/client';
-import type { MailStore } from '../mail/store';
+import type { MailStore, StoredAttachment } from '../mail/store';
 import { AccountSync, type SyncEvents } from './account';
 
 // A token is renewed this long before it expires, so no request starts with one about to end.
@@ -40,6 +45,7 @@ function createTokenSource(requestHost: RequestHost, remoteId: string) {
 // Runs one sync per Microsoft account.
 export class SyncEngine {
   private readonly accounts = new Map<number, AccountSync>();
+  private readonly clients = new Map<number, GraphClient>();
 
   constructor(private readonly options: SyncEngineOptions) {}
 
@@ -55,12 +61,14 @@ export class SyncEngine {
       }
       sync.stop();
       this.accounts.delete(accountId);
+      this.clients.delete(accountId);
     }
     for (const { id, remoteId } of wanted.values()) {
       if (this.accounts.has(id)) continue;
       const client = new GraphClient({ fetch, getToken: createTokenSource(requestHost, remoteId) });
       const sync = new AccountSync({ accountId: id, client, store, events });
       this.accounts.set(id, sync);
+      this.clients.set(id, client);
       void sync.run();
     }
     events.statusChanged();
@@ -70,6 +78,36 @@ export class SyncEngine {
     return [...this.accounts.values()].map((sync) => sync.status());
   }
 
+  // Makes sure the text of a message is stored. Does nothing for mail without a provider.
+  async loadBody(messageId: number): Promise<void> {
+    const { store } = this.options;
+    const message = store.getRemoteMessage(messageId);
+    if (!message || store.getBodyContent(messageId) !== null) return;
+    const sync = this.accounts.get(message.accountId);
+    if (!sync) throw new Error('The account of this message is not signed in');
+    await sync.loadBody(messageId, message.remoteId);
+  }
+
+  // Fetches an attachment from its provider and writes it to a file.
+  async downloadAttachment(attachment: StoredAttachment, path: string): Promise<void> {
+    const client = this.clients.get(attachment.accountId);
+    if (!client || !attachment.remoteId || !attachment.messageRemoteId) {
+      throw new Error('This attachment has no content that could be saved');
+    }
+    const message = encodeURIComponent(attachment.messageRemoteId);
+    const id = encodeURIComponent(attachment.remoteId);
+    const response = await client.download(`/me/messages/${message}/attachments/${id}/$value`);
+    if (!response.body) throw new Error('The answer has no content');
+    try {
+      const content = Readable.fromWeb(response.body as ReadableStream);
+      await pipeline(content, createWriteStream(path, { mode: 0o600 }));
+    } catch (error) {
+      // Half a file is worse than none.
+      await rm(path, { force: true });
+      throw error;
+    }
+  }
+
   syncNow(): void {
     for (const sync of this.accounts.values()) sync.syncNow();
   }
@@ -77,5 +115,6 @@ export class SyncEngine {
   stop(): void {
     for (const sync of this.accounts.values()) sync.stop();
     this.accounts.clear();
+    this.clients.clear();
   }
 }

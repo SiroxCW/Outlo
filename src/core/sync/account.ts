@@ -1,6 +1,7 @@
 import type { AccountSyncStatus, FolderRole, SyncState } from '@shared/api';
 import { GraphError, OfflineError, SignInNeededError, type GraphClient } from '../graph/client';
 import type { MailStore, SyncFolder } from '../mail/store';
+import { fetchBody } from './bodies';
 import { fetchFolders, fetchRoles, toRemoteFolders } from './folders';
 import { syncMessagePage } from './messages';
 
@@ -10,6 +11,9 @@ const INBOX_INTERVAL = 30 * SECOND;
 const OTHER_INTERVAL = 5 * MINUTE;
 const FOLDER_LIST_INTERVAL = 5 * MINUTE;
 const ROLES_INTERVAL = 60 * MINUTE;
+// The texts of mail this recent are fetched ahead, so it can be read without a connection.
+const PREFETCH_AGE = 30 * 24 * 60 * MINUTE;
+const PREFETCH_BATCH = 50;
 
 // Standard folders are fetched before the folders the user made, the inbox before all others.
 const PRIORITY: (FolderRole | null)[] = ['inbox', 'sent', 'drafts', 'archive', null];
@@ -44,6 +48,10 @@ export class AccountSync {
   private foldersAt: number | undefined;
   private readonly hiddenChildren = new Map<string, number>();
   private readonly checkedAt = new Map<number, number>();
+  private bodyQueue: { id: number; remoteId: string }[] = [];
+  // Texts that could not be fetched. They are not tried again before the next start.
+  private readonly bodiesSkipped = new Set<number>();
+  private readonly bodiesLoading = new Map<number, Promise<void>>();
   private failures = 0;
   private stopped = false;
   private wakeUp: (() => void) | undefined;
@@ -67,6 +75,42 @@ export class AccountSync {
   stop(): void {
     this.stopped = true;
     this.wakeUp?.();
+  }
+
+  // Fetches the text of one message right now, for example because the user opened it.
+  loadBody(messageId: number, remoteId: string): Promise<void> {
+    let loading = this.bodiesLoading.get(messageId);
+    if (!loading) {
+      const { client, store } = this.options;
+      loading = fetchBody(client, store, messageId, remoteId).finally(() =>
+        this.bodiesLoading.delete(messageId),
+      );
+      this.bodiesLoading.set(messageId, loading);
+    }
+    return loading;
+  }
+
+  // Fetches the text of the next recent message that has none. False when none is left.
+  private async prefetchBody(now: number): Promise<boolean> {
+    if (this.bodyQueue.length === 0) {
+      this.bodyQueue = this.options.store
+        .listMessagesWithoutBody(
+          this.options.accountId,
+          now - PREFETCH_AGE,
+          PREFETCH_BATCH + this.bodiesSkipped.size,
+        )
+        .filter((entry) => !this.bodiesSkipped.has(entry.id));
+    }
+    const next = this.bodyQueue.shift();
+    if (!next) return false;
+    try {
+      await this.loadBody(next.id, next.remoteId);
+    } catch (error) {
+      // One message that cannot be fetched must not hold up the others.
+      if (!(error instanceof GraphError)) throw error;
+      this.bodiesSkipped.add(next.id);
+    }
+    return true;
   }
 
   // Checks everything for news now, also after an error.
@@ -150,6 +194,11 @@ export class AccountSync {
     const folder = due ?? folders.find((entry) => entry.syncPending !== 0);
 
     if (!folder) {
+      // All headers are there. Now the texts of recent mail, one message per step.
+      if (await this.prefetchBody(now)) {
+        this.setState('syncing');
+        return 0;
+      }
       this.setState('idle');
       const nextCheck = folders.map((entry) => {
         const interval = entry.role === 'inbox' ? INBOX_INTERVAL : OTHER_INTERVAL;

@@ -97,8 +97,8 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const filter: MessageFilter = folder?.role === 'inbox' ? inboxFilter : 'all';
   const { source, state } = useMessageList(folder?.id, filter);
 
-  const loaded = useMessage(selectedId);
-  const message = selectedId === undefined ? null : loaded;
+  const opened = useMessage(selectedId);
+  const message = selectedId === undefined ? null : opened.message;
 
   // Opening an unread message marks it as read, once. The user can mark it unread again.
   // Changes are not sent to mail providers yet, so only demo mail can be changed for now.
@@ -114,107 +114,111 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const searching = search.trim() !== '';
   const noAccounts = !session.demo && mailboxes?.accounts.length === 0;
   return (
-    <FluentProvider theme={theme} className={styles.root}>
-      <TitleBar
-        customFrame={titleBar === 'custom'}
-        dark={dark}
-        search={search}
-        onSearch={setSearch}
-      />
-      <div className={styles.body}>
-        <AppBar dark={dark} />
-        <div className={styles.main}>
-          <Ribbon
-            message={editable ? message : null}
-            theme={themeChoice}
-            titleBar={titleBar}
-            onToggleFolders={() => setFoldersVisible((visible) => !visible)}
-            onSetRead={(isRead) =>
-              message &&
-              void window.outlo.request('messages.setRead', { ids: [message.id], isRead })
-            }
-            onSetFlagged={(isFlagged) =>
-              message &&
-              void window.outlo.request('messages.setFlagged', { ids: [message.id], isFlagged })
-            }
-            onTheme={(choice) => settings.set('theme', choice)}
-            onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
-            demo={session.demo}
-            onDemo={setDemo}
-          />
-          {session.demo && (
-            <MessageBar className={styles.banner}>
-              <MessageBarBody>{t('demo.banner')}</MessageBarBody>
-              <MessageBarActions>
-                <Button size="small" onClick={() => setDemo(false)}>
-                  {t('demo.leave')}
-                </Button>
-              </MessageBarActions>
-            </MessageBar>
-          )}
-          {noAccounts ? (
-            <div className={styles.content}>
-              <Welcome onAddAccount={() => setAddingAccount(true)} onDemo={() => setDemo(true)} />
-            </div>
-          ) : (
-            <div className={styles.content}>
-              {foldersVisible && mailboxes && (
-                <>
-                  <div className={styles.pane} style={{ width: folderWidth }}>
-                    <FolderPane
-                      mailboxes={mailboxes}
-                      onAddAccount={session.demo ? undefined : () => setAddingAccount(true)}
-                      onRemoveAccount={session.demo ? undefined : setRemoving}
-                      syncStatus={syncStatus}
-                      selectedFolderId={searching ? undefined : folder?.id}
-                      onSelect={(folderId) => {
-                        setChosenFolderId(folderId);
-                        setSelectedId(undefined);
-                        setSearch('');
-                      }}
+    // No class of our own on the provider: Fluent copies the provider's classes to the layer
+    // that holds menus and dialogs, and a layout class there would cover the whole window.
+    <FluentProvider theme={theme} style={{ height: '100%' }}>
+      <div className={styles.root}>
+        <TitleBar
+          customFrame={titleBar === 'custom'}
+          dark={dark}
+          search={search}
+          onSearch={setSearch}
+        />
+        <div className={styles.body}>
+          <AppBar dark={dark} />
+          <div className={styles.main}>
+            <Ribbon
+              message={editable ? message : null}
+              theme={themeChoice}
+              titleBar={titleBar}
+              onToggleFolders={() => setFoldersVisible((visible) => !visible)}
+              onSetRead={(isRead) =>
+                message &&
+                void window.outlo.request('messages.setRead', { ids: [message.id], isRead })
+              }
+              onSetFlagged={(isFlagged) =>
+                message &&
+                void window.outlo.request('messages.setFlagged', { ids: [message.id], isFlagged })
+              }
+              onTheme={(choice) => settings.set('theme', choice)}
+              onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
+              demo={session.demo}
+              onDemo={setDemo}
+            />
+            {session.demo && (
+              <MessageBar className={styles.banner}>
+                <MessageBarBody>{t('demo.banner')}</MessageBarBody>
+                <MessageBarActions>
+                  <Button size="small" onClick={() => setDemo(false)}>
+                    {t('demo.leave')}
+                  </Button>
+                </MessageBarActions>
+              </MessageBar>
+            )}
+            {noAccounts ? (
+              <div className={styles.content}>
+                <Welcome onAddAccount={() => setAddingAccount(true)} onDemo={() => setDemo(true)} />
+              </div>
+            ) : (
+              <div className={styles.content}>
+                {foldersVisible && mailboxes && (
+                  <>
+                    <div className={styles.pane} style={{ width: folderWidth }}>
+                      <FolderPane
+                        mailboxes={mailboxes}
+                        onAddAccount={session.demo ? undefined : () => setAddingAccount(true)}
+                        onRemoveAccount={session.demo ? undefined : setRemoving}
+                        syncStatus={syncStatus}
+                        selectedFolderId={searching ? undefined : folder?.id}
+                        onSelect={(folderId) => {
+                          setChosenFolderId(folderId);
+                          setSelectedId(undefined);
+                          setSearch('');
+                        }}
+                      />
+                    </div>
+                    <Splitter
+                      width={folderWidth}
+                      min={160}
+                      max={420}
+                      onResize={setFolderWidth}
+                      onCommit={(width) => settings.set('folderWidth', String(width))}
                     />
-                  </div>
-                  <Splitter
-                    width={folderWidth}
-                    min={160}
-                    max={420}
-                    onResize={setFolderWidth}
-                    onCommit={(width) => settings.set('folderWidth', String(width))}
-                  />
-                </>
-              )}
-              <div className={`${styles.pane} ${styles.card}`} style={{ width: listWidth }}>
-                {error && <div className={styles.error}>{`${t('error.core')}: ${error}`}</div>}
-                {searching ? (
-                  <SearchResults
-                    query={search}
-                    selectedId={selectedId}
-                    onSelect={(selected) => setSelectedId(selected.id)}
-                  />
-                ) : (
-                  <MessageList
-                    folder={folder}
-                    filter={filter}
-                    source={source}
-                    state={state}
-                    selectedId={selectedId}
-                    onFilter={setInboxFilter}
-                    onSelect={(selected) => setSelectedId(selected.id)}
-                  />
+                  </>
                 )}
+                <div className={`${styles.pane} ${styles.card}`} style={{ width: listWidth }}>
+                  {error && <div className={styles.error}>{`${t('error.core')}: ${error}`}</div>}
+                  {searching ? (
+                    <SearchResults
+                      query={search}
+                      selectedId={selectedId}
+                      onSelect={(selected) => setSelectedId(selected.id)}
+                    />
+                  ) : (
+                    <MessageList
+                      folder={folder}
+                      filter={filter}
+                      source={source}
+                      state={state}
+                      selectedId={selectedId}
+                      onFilter={setInboxFilter}
+                      onSelect={(selected) => setSelectedId(selected.id)}
+                    />
+                  )}
+                </div>
+                <Splitter
+                  width={listWidth}
+                  min={280}
+                  max={720}
+                  onResize={setListWidth}
+                  onCommit={(width) => settings.set('listWidth', String(width))}
+                />
+                <div className={styles.reading}>
+                  <ReadingPane open={{ ...opened, message }} dark={dark} />
+                </div>
               </div>
-              <Splitter
-                width={listWidth}
-                min={280}
-                max={720}
-                onResize={setListWidth}
-                onCommit={(width) => settings.set('listWidth', String(width))}
-              />
-              <div className={styles.reading}>
-                <ReadingPane message={message} dark={dark} />
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
       {addingAccount && (

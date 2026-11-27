@@ -33,6 +33,8 @@ const useStyles = makeStyles({
   root: { height: '100%', overflowY: 'auto', padding: '4px 0 8px 8px', boxSizing: 'border-box' },
   row: {
     width: '100%',
+    // Lets a long name shrink next to the menu button, where it would push the pane wider.
+    minWidth: 0,
     height: '28px',
     display: 'flex',
     alignItems: 'center',
