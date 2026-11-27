@@ -62,7 +62,9 @@ async function runCheck(accessToken, [label, path]) {
   });
   const body = await response.json();
   if (!response.ok) {
-    console.log(`  ${label}: FAILED, ${response.status} ${body.error?.code}: ${body.error?.message}`);
+    console.log(
+      `  ${label}: FAILED, ${response.status} ${body.error?.code}: ${body.error?.message}`,
+    );
     return false;
   }
   const details = Object.entries(body)
@@ -139,7 +141,9 @@ server.listen(0, '127.0.0.1', () => {
   });
   const authorizeUrl = `${authority}/authorize?${query}`;
 
-  console.log(`Opening the browser. If nothing happens, open this address yourself:\n\n${authorizeUrl}\n`);
+  console.log(
+    `Opening the browser. If nothing happens, open this address yourself:\n\n${authorizeUrl}\n`,
+  );
   console.log('If the sign-in page shows an error and does not come back here, press Ctrl+C.\n');
   spawn('xdg-open', [authorizeUrl], { stdio: 'ignore', detached: true })
     .on('error', () => {})

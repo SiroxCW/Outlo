@@ -1,0 +1,43 @@
+appId: io.github.siroxcw.outlo
+productName: Outlo
+artifactName: ${name}-${version}-${arch}.${ext}
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**
+  - resources/icons/**
+  - package.json
+linux:
+  executableName: outlo
+  target:
+    - AppImage
+    - deb
+    - rpm
+  icon: resources/icons
+  category: Office;Network;Email
+  synopsis: Mail client for the Linux desktop
+  description: Mail client for the Linux desktop. Works with Outlook.com, Microsoft 365, Gmail and IMAP accounts.
+  maintainer: SiroxCW <75880834+SiroxCW@users.noreply.github.com>
+  vendor: Outlo
+  desktop:
+    entry:
+      Keywords: mail;email;e-mail;
+      StartupWMClass: outlo
+deb:
+  # The defaults of electron-builder plus libasound2 and libgbm1. Without them the app does not
+  # start on a minimal system. The version keeps apt from choosing liboss4-salsa-asound2 instead
+  # of the real libasound2.
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+    - libasound2 (>= 1.0.17)
+    - libgbm1
+publish: null
