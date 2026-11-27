@@ -148,3 +148,20 @@ describe('core', () => {
     await expect(list({})).resolves.toMatchObject({ total: inbox.totalCount });
   });
 });
+
+describe('settings', () => {
+  it('stores settings of the user interface and announces the change', async () => {
+    const { client, events } = start();
+    await client.request('settings.set', { key: 'ui.theme', value: 'dark' });
+    await settle();
+    expect(await client.request('settings.get', undefined)).toEqual({ 'ui.theme': 'dark' });
+    expect(events).toContainEqual({ type: 'settings.changed', payload: undefined });
+  });
+
+  it('refuses keys outside of the user interface settings', async () => {
+    const { client, raw } = start();
+    await expect(raw('settings.set', { key: 'demo.seeded', value: '1' })).rejects.toThrow('ui.');
+    await expect(raw('settings.set', { key: 'ui.x y', value: '1' })).rejects.toThrow('ui.');
+    expect(await client.request('settings.get', undefined)).toEqual({});
+  });
+});

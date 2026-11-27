@@ -161,6 +161,23 @@ export class MailStore {
     return { total: count.total, offset, messages: rows.map(toSummary) };
   }
 
+  countByTime(folderId: number, filter: MessageFilter, boundaries: number[]): number[] {
+    const focus = filter === 'all' ? '' : `AND is_focused = ${filter === 'focused' ? 1 : 0}`;
+    // One pass over the folder index. Each column counts the messages newer than one boundary.
+    const columns = boundaries.map(
+      (_, index) => `count(*) FILTER (WHERE received_at >= ?) AS c${index}`,
+    );
+    const row = this.sql(
+      `SELECT count(*) AS total, ${['0 AS none', ...columns].join(', ')}
+       FROM messages WHERE folder_id = ? ${focus}`,
+    ).get(...boundaries, folderId) as Record<string, number>;
+
+    const newerThan = boundaries.map((_, index) => row[`c${index}`] ?? 0);
+    return [...newerThan, row.total ?? 0].map(
+      (count, index) => count - (newerThan[index - 1] ?? 0),
+    );
+  }
+
   getMessage(id: number): Message | null {
     const row = this.sql(
       `SELECT ${SUMMARY_COLUMNS}, m.cc_recipients, b.content_type, b.content
@@ -192,6 +209,11 @@ export class MailStore {
     )
       .all(match, limit)
       .map(toSummary);
+  }
+
+  listSettings(prefix: string): Record<string, string> {
+    const rows = this.sql("SELECT key, value FROM settings WHERE key LIKE ? || '%'").all(prefix);
+    return Object.fromEntries(rows.map((row) => [row.key as string, row.value as string]));
   }
 
   getSetting(key: string): string | null {

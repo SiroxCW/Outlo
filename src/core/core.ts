@@ -1,4 +1,10 @@
-import { MAX_PAGE_SIZE, type CoreEvents, type CoreRequests, type MessageFilter } from '@shared/api';
+import {
+  MAX_PAGE_SIZE,
+  MAX_TIME_BOUNDARIES,
+  type CoreEvents,
+  type CoreRequests,
+  type MessageFilter,
+} from '@shared/api';
 import { createServer, type Endpoint } from '@shared/rpc';
 import { openDatabase } from './db/database';
 import { createDemoBody } from './demo/body';
@@ -9,6 +15,7 @@ import * as check from './validate';
 const FILTERS: readonly MessageFilter[] = ['all', 'focused', 'other'];
 const MAX_IDS_PER_COMMAND = 10_000;
 const DEMO_SEEDED = 'demo.seeded';
+const UI_SETTINGS = 'ui.';
 
 export interface CoreOptions {
   databasePath: string;
@@ -36,6 +43,15 @@ export function createCore(options: CoreOptions) {
         check.oneOf(input.filter, 'filter', FILTERS),
         check.integer(input.offset, 'offset', 0, Number.MAX_SAFE_INTEGER),
         check.integer(input.limit, 'limit', 1, MAX_PAGE_SIZE),
+      );
+    },
+
+    'messages.countByTime': (params) => {
+      const input = check.record(params, 'params');
+      return store.countByTime(
+        check.id(input.folderId, 'folderId'),
+        check.oneOf(input.filter, 'filter', FILTERS),
+        check.timestamps(input.boundaries, 'boundaries', MAX_TIME_BOUNDARIES),
       );
     },
 
@@ -78,6 +94,17 @@ export function createCore(options: CoreOptions) {
         check.boolean(input.isFlagged, 'isFlagged'),
       );
       announce(folderIds, false);
+      return undefined;
+    },
+
+    'settings.get': () => store.listSettings(UI_SETTINGS),
+
+    'settings.set': (params) => {
+      const input = check.record(params, 'params');
+      const key = check.text(input.key, 'key', 64);
+      if (!/^ui\.[A-Za-z0-9.]+$/.test(key)) throw new Error('key must start with "ui."');
+      store.setSetting(key, check.text(input.value, 'value', 2000));
+      server.emit('settings.changed', undefined);
       return undefined;
     },
   });

@@ -87,11 +87,22 @@ export type CoreRequests = {
     params: { folderId: number; filter: MessageFilter; offset: number; limit: number };
     result: MessagePage;
   };
+  // Number of messages per time span. The boundaries are timestamps, newest first. The result
+  // has one more entry than there are boundaries: newer than the first, between each pair,
+  // older than the last.
+  'messages.countByTime': {
+    params: { folderId: number; filter: MessageFilter; boundaries: number[] };
+    result: number[];
+  };
   'messages.get': { params: { id: number }; result: Message | null };
   'messages.search': { params: { query: string; limit: number }; result: MessageSummary[] };
 
   'messages.setRead': { params: { ids: number[]; isRead: boolean }; result: undefined };
   'messages.setFlagged': { params: { ids: number[]; isFlagged: boolean }; result: undefined };
+
+  // Settings of the user interface. Keys start with "ui.".
+  'settings.get': { params: undefined; result: Record<string, string> };
+  'settings.set': { params: { key: string; value: string }; result: undefined };
 };
 
 // Events only say what changed. The UI asks again for the data it shows.
@@ -99,6 +110,7 @@ export type CoreEvents = {
   'accounts.changed': undefined;
   'folders.changed': undefined;
   'messages.changed': { folderIds: number[] };
+  'settings.changed': undefined;
 };
 
 export type CoreEvent = {
@@ -110,13 +122,35 @@ export type CoreRequest = <Method extends keyof CoreRequests>(
   params: CoreRequests[Method]['params'],
 ) => Promise<CoreRequests[Method]['result']>;
 
+export type TitleBarStyle = 'custom' | 'native';
+
+export interface TitleBarColors {
+  background: string;
+  symbols: string;
+}
+
+// Window functions. They are answered by the main process, not by the core.
+export interface WindowBridge {
+  getTitleBarStyle(): Promise<TitleBarStyle>;
+  // Recreates the window, because a window cannot change its frame while it is open.
+  setTitleBarStyle(style: TitleBarStyle): Promise<void>;
+  setTitleBarColors(colors: TitleBarColors): void;
+}
+
 // What the preload script exposes to the UI as window.outlo.
 export interface OutloBridge {
   request: CoreRequest;
   subscribe(listener: (event: CoreEvent) => void): () => void;
+  window: WindowBridge;
 }
 
 export const MAX_PAGE_SIZE = 500;
+export const MAX_TIME_BOUNDARIES = 32;
+export const TITLE_BAR_HEIGHT = 48;
+
+export const WINDOW_GET_TITLE_BAR = 'window:get-title-bar';
+export const WINDOW_SET_TITLE_BAR = 'window:set-title-bar';
+export const WINDOW_SET_COLORS = 'window:set-colors';
 
 export const CORE_PORT_REQUEST = 'core-port-request';
 export const CORE_PORT = 'core-port';

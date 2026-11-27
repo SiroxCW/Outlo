@@ -42,4 +42,6 @@ resources/      icons
 
 Outlo is free software under the GNU General Public License, version 3. See [LICENSE](LICENSE).
 
+The app includes the Selawik font by Microsoft under the SIL Open Font License. The licence text is in `src/renderer/public/fonts/LICENSE.txt`.
+
 Outlo is an independent project. It is not affiliated with, endorsed by or sponsored by Microsoft. Outlook and Microsoft are trademarks of the Microsoft group of companies.

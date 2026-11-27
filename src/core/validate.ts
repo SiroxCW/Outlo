@@ -41,6 +41,13 @@ export function oneOf<Option extends string>(
   return value as Option;
 }
 
+export function timestamps(value: unknown, name: string, maxLength: number): number[] {
+  if (!Array.isArray(value) || value.length > maxLength) {
+    throw new Error(`${name} must be a list of at most ${maxLength} entries`);
+  }
+  return value.map((entry) => integer(entry, name, 0, Number.MAX_SAFE_INTEGER));
+}
+
 export function idList(value: unknown, name: string, maxLength: number): number[] {
   if (!Array.isArray(value) || value.length > maxLength) {
     throw new Error(`${name} must be a list of at most ${maxLength} entries`);

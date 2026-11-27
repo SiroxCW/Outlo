@@ -1,19 +1,45 @@
 import { join } from 'node:path';
-import { BrowserWindow, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron';
+import {
+  TITLE_BAR_HEIGHT,
+  WINDOW_GET_TITLE_BAR,
+  WINDOW_SET_COLORS,
+  WINDOW_SET_TITLE_BAR,
+  type TitleBarColors,
+  type TitleBarStyle,
+} from '@shared/api';
 import icon from '../../resources/icons/256x256.png?asset';
-import { rendererUrl } from './renderer-site';
+import { isRendererUrl, rendererUrl } from './renderer-site';
+import { readTitleBarStyle, writeTitleBarStyle } from './window-settings';
+
+const COLOR = /^#[0-9a-f]{6}$/i;
+const customFrames = new WeakSet<BrowserWindow>();
 
 export function createMainWindow(): BrowserWindow {
+  // Electron crashes when it draws window buttons without a display, as in automated tests.
+  const headless = app.commandLine.getSwitchValue('ozone-platform') === 'headless';
+  const custom = readTitleBarStyle() === 'custom' && !headless;
+  const dark = nativeTheme.shouldUseDarkColors;
+
   const window = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 800,
-    minHeight: 500,
+    width: 1440,
+    height: 900,
+    minWidth: 900,
+    minHeight: 560,
     show: false,
     autoHideMenuBar: true,
     icon,
     // Matches the page background, so the window does not flash white before the UI is drawn.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1f1f1f' : '#ffffff',
+    backgroundColor: dark ? '#141414' : '#f5f5f5',
+    // Hides the system title bar. Electron draws the three window buttons over our own bar.
+    ...(custom && {
+      titleBarStyle: 'hidden' as const,
+      titleBarOverlay: {
+        color: dark ? '#141414' : '#f5f5f5',
+        symbolColor: dark ? '#ffffff' : '#242424',
+        height: TITLE_BAR_HEIGHT,
+      },
+    }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -23,7 +49,45 @@ export function createMainWindow(): BrowserWindow {
     },
   });
 
+  if (custom) customFrames.add(window);
   window.once('ready-to-show', () => window.show());
   void window.loadURL(rendererUrl);
   return window;
+}
+
+function isTrusted(event: IpcMainInvokeEvent | Electron.IpcMainEvent): boolean {
+  const frame = event.senderFrame;
+  return frame !== null && frame === event.sender.mainFrame && isRendererUrl(frame.url);
+}
+
+export function handleWindowRequests(): void {
+  ipcMain.handle(WINDOW_GET_TITLE_BAR, (event): TitleBarStyle => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return window && customFrames.has(window) ? 'custom' : 'native';
+  });
+
+  ipcMain.handle(WINDOW_SET_TITLE_BAR, (event, style: TitleBarStyle) => {
+    if (!isTrusted(event) || (style !== 'custom' && style !== 'native')) return;
+    if (style === readTitleBarStyle()) return;
+    writeTitleBarStyle(style);
+
+    // A window cannot change its frame while it is open, so it is replaced by a new one.
+    const old = BrowserWindow.fromWebContents(event.sender);
+    const replacement = createMainWindow();
+    if (old) {
+      replacement.setBounds(old.getBounds());
+      old.destroy();
+    }
+  });
+
+  ipcMain.on(WINDOW_SET_COLORS, (event, colors: TitleBarColors) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!isTrusted(event) || !window || !customFrames.has(window)) return;
+    if (!COLOR.test(colors?.background) || !COLOR.test(colors?.symbols)) return;
+    window.setTitleBarOverlay({
+      color: colors.background,
+      symbolColor: colors.symbols,
+      height: TITLE_BAR_HEIGHT,
+    });
+  });
 }

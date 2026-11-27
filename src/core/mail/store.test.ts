@@ -245,3 +245,26 @@ describe('settings', () => {
     expect(store.getSetting('theme')).toBe('light');
   });
 });
+
+describe('countByTime', () => {
+  it('counts the messages of each time span', () => {
+    for (const receivedAt of [950, 900, 600, 550, 500, 100]) add({ receivedAt });
+    expect(store.countByTime(inbox, 'all', [900, 500, 200])).toEqual([2, 3, 0, 1]);
+  });
+
+  it('respects the filter and returns one total without boundaries', () => {
+    add({ receivedAt: 10, isFocused: false });
+    add({ receivedAt: 20 });
+    expect(store.countByTime(inbox, 'other', [15])).toEqual([0, 1]);
+    expect(store.countByTime(inbox, 'all', [])).toEqual([2]);
+  });
+});
+
+describe('listSettings', () => {
+  it('returns only the settings below a prefix', () => {
+    store.setSetting('ui.theme', 'dark');
+    store.setSetting('ui.listWidth', '400');
+    store.setSetting('demo.seeded', '1');
+    expect(store.listSettings('ui.')).toEqual({ 'ui.theme': 'dark', 'ui.listWidth': '400' });
+  });
+});
