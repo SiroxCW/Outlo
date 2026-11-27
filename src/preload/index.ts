@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { CORE_PORT, CORE_PORT_REQUEST, type CoreRequests, type OutloBridge } from '@shared/api';
+import {
+  CORE_PORT,
+  CORE_PORT_REQUEST,
+  type CoreEvents,
+  type CoreRequests,
+  type OutloBridge,
+} from '@shared/api';
 import { createClient } from '@shared/rpc';
 
 let port: MessagePort | undefined;
@@ -14,13 +20,16 @@ ipcRenderer.on(CORE_PORT, (event) => {
 });
 ipcRenderer.send(CORE_PORT_REQUEST);
 
-// The port stays in this script. The page only gets the request function.
-const request = createClient<CoreRequests>({
+// The port stays in this script. The page only gets these two functions.
+const client = createClient<CoreRequests, CoreEvents>({
   post: (message) => (port ? port.postMessage(message) : waiting.push(message)),
   listen: (handler) => {
     onMessage = handler;
   },
 });
 
-const bridge: OutloBridge = { request };
+const bridge: OutloBridge = {
+  request: (method, params) => client.request(method, params),
+  subscribe: (listener) => client.subscribe(listener),
+};
 contextBridge.exposeInMainWorld('outlo', bridge);

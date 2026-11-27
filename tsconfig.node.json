@@ -2,7 +2,7 @@
   "extends": "./tsconfig.base.json",
   "include": [
     "electron.vite.config.ts",
-    "vitest.config.ts",
+    "vitest.config.mts",
     "src/main/**/*",
     "src/preload/**/*",
     "src/core/**/*",

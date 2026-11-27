@@ -9,7 +9,6 @@ import {
   webLightTheme,
 } from '@fluentui/react-components';
 import { useEffect, useState } from 'react';
-import type { CoreInfo } from '@shared/api';
 import { useSystemDarkMode } from './useSystemDarkMode';
 
 const useStyles = makeStyles({
@@ -27,32 +26,54 @@ const useStyles = makeStyles({
   },
 });
 
-type CoreState = { info: CoreInfo } | { error: string } | undefined;
+interface Totals {
+  accounts: number;
+  folders: number;
+  messages: number;
+  unread: number;
+}
 
+async function loadTotals(): Promise<Totals> {
+  const [accounts, folders] = await Promise.all([
+    window.outlo.request('accounts.list', undefined),
+    window.outlo.request('folders.list', undefined),
+  ]);
+  return {
+    accounts: accounts.length,
+    folders: folders.length,
+    messages: folders.reduce((sum, folder) => sum + folder.totalCount, 0),
+    unread: folders.reduce((sum, folder) => sum + folder.unreadCount, 0),
+  };
+}
+
+// Placeholder until the real layout exists. It shows that queries and change events arrive.
 export function App() {
   const styles = useStyles();
   const dark = useSystemDarkMode();
-  const [core, setCore] = useState<CoreState>();
+  const [totals, setTotals] = useState<Totals>();
+  const [error, setError] = useState<string>();
 
   useEffect(() => {
-    window.outlo
-      .request('core.info', undefined)
-      .then((info) => setCore({ info }))
-      .catch((error: Error) => setCore({ error: error.message }));
+    const refresh = () =>
+      loadTotals()
+        .then(setTotals)
+        .catch((reason: Error) => setError(reason.message));
+    void refresh();
+    return window.outlo.subscribe(() => void refresh());
   }, []);
 
+  const count = (value: number) => value.toLocaleString('en-US');
   return (
     <FluentProvider theme={dark ? webDarkTheme : webLightTheme} className={styles.root}>
       <Title1>Outlo</Title1>
-      {core === undefined && <Spinner label="Connecting to the core process" />}
-      {core && 'info' in core && (
+      {!totals && !error && <Spinner label="Connecting to the core process" />}
+      {totals && (
         <Body1>
-          Core process is running (process {core.info.pid}, Node {core.info.nodeVersion}).
+          Demo data: {count(totals.accounts)} accounts, {count(totals.folders)} folders,{' '}
+          {count(totals.messages)} messages, {count(totals.unread)} unread.
         </Body1>
       )}
-      {core && 'error' in core && (
-        <Body1 className={styles.error}>Core process failed: {core.error}</Body1>
-      )}
+      {error && <Body1 className={styles.error}>Core process failed: {error}</Body1>}
     </FluentProvider>
   );
 }

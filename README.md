@@ -25,13 +25,15 @@ npm run dev
 
 Building the .deb and .rpm packages on Fedora needs the `libxcrypt-compat` package.
 
+Until real accounts are supported, the app fills itself with invented demo data on the first start. A development build keeps it in `~/.config/outlo-dev`. Delete that folder to start again from nothing.
+
 ## Source layout
 
 ```
 src/main/       Electron main process: windows, security, starting the core
 src/preload/    bridge between the UI and the core
 src/renderer/   user interface (React and Fluent UI)
-src/core/       background process: later the database and the mail sync
+src/core/       background process: database, demo data, later the mail sync
 src/shared/     code and types used by all of them
 resources/      icons
 ```

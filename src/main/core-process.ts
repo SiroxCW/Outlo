@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { app, ipcMain, MessageChannelMain, utilityProcess, type UtilityProcess } from 'electron';
 import { CORE_PORT, CORE_PORT_REQUEST } from '@shared/api';
 import corePath from '../core/index?modulePath';
@@ -9,7 +11,13 @@ export function startCore(): void {
   let quitting = false;
   app.once('before-quit', () => (quitting = true));
 
-  core = utilityProcess.fork(corePath, [], { serviceName: 'Outlo Core' });
+  // Until real accounts exist, the core works on a database of its own with demo data.
+  const dataDirectory = app.getPath('userData');
+  mkdirSync(dataDirectory, { recursive: true });
+  core = utilityProcess.fork(corePath, [], {
+    serviceName: 'Outlo Core',
+    env: { ...process.env, OUTLO_DATABASE: join(dataDirectory, 'demo.db') },
+  });
   core.on('exit', (code) => {
     core = undefined;
     if (!quitting) console.error(`Core process exited unexpectedly with code ${code}`);
