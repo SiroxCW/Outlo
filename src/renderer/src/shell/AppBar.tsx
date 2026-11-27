@@ -2,6 +2,7 @@ import { makeStyles, mergeClasses, tokens, Tooltip } from '@fluentui/react-compo
 import { CalendarRegular, MailFilled, PeopleRegular } from '@fluentui/react-icons';
 import type { ReactElement } from 'react';
 import { t } from '../i18n';
+import { barBackground } from '../theme';
 
 const useStyles = makeStyles({
   root: {
@@ -65,10 +66,10 @@ function Module(props: {
 }
 
 // The strip on the left that switches between the modules. Calendar and People come later.
-export function AppBar() {
+export function AppBar({ dark }: { dark: boolean }) {
   const styles = useStyles();
   return (
-    <nav className={styles.root}>
+    <nav className={styles.root} style={{ backgroundColor: barBackground(dark) }}>
       <Module label={t('module.mail')} icon={<MailFilled />} selected />
       <Module label={t('module.calendar')} icon={<CalendarRegular />} disabled />
       <Module label={t('module.people')} icon={<PeopleRegular />} disabled />

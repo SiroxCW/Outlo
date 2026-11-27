@@ -35,12 +35,18 @@ import { t } from '../i18n';
 import { THEME_CHOICES, type ThemeChoice } from '../theme';
 
 const useStyles = makeStyles({
-  tabs: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, height: '36px' },
+  tabs: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    height: '36px',
+    paddingLeft: '8px',
+  },
   ribbon: {
     display: 'flex',
     alignItems: 'stretch',
     height: '92px',
-    marginRight: '8px',
+    margin: '0 8px',
     padding: '6px 4px 2px',
     boxSizing: 'border-box',
     borderRadius: tokens.borderRadiusLarge,

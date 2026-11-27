@@ -41,7 +41,12 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     textAlign: 'left',
   },
-  chevron: { fontSize: '12px' },
+  chevron: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '12px',
+  },
   empty: {
     flexGrow: 1,
     display: 'flex',

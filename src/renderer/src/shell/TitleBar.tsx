@@ -3,6 +3,7 @@ import { SearchRegular } from '@fluentui/react-icons';
 import { TITLE_BAR_HEIGHT } from '@shared/api';
 import iconUrl from '../../../../resources/icon.svg';
 import { t } from '../i18n';
+import { barBackground } from '../theme';
 
 const useStyles = makeStyles({
   root: {
@@ -33,11 +34,12 @@ const useStyles = makeStyles({
 
 interface TitleBarProps {
   customFrame: boolean;
+  dark: boolean;
   search: string;
   onSearch(query: string): void;
 }
 
-export function TitleBar({ customFrame, search, onSearch }: TitleBarProps) {
+export function TitleBar({ customFrame, dark, search, onSearch }: TitleBarProps) {
   const styles = useStyles();
   return (
     <header
@@ -46,6 +48,7 @@ export function TitleBar({ customFrame, search, onSearch }: TitleBarProps) {
         customFrame && styles.customFrame,
         customFrame && 'window-drag',
       )}
+      style={{ backgroundColor: barBackground(dark) }}
     >
       <div className={styles.brand}>
         <img className={styles.icon} src={iconUrl} alt="" />

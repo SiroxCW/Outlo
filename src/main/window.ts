@@ -35,7 +35,7 @@ export function createMainWindow(): BrowserWindow {
     ...(custom && {
       titleBarStyle: 'hidden' as const,
       titleBarOverlay: {
-        color: dark ? '#141414' : '#f5f5f5',
+        color: dark ? '#0a0a0a' : '#ebebeb',
         symbolColor: dark ? '#ffffff' : '#242424',
         height: TITLE_BAR_HEIGHT,
       },

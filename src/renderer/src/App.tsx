@@ -26,7 +26,7 @@ import { AppBar } from './shell/AppBar';
 import { Ribbon } from './shell/Ribbon';
 import { Splitter } from './shell/Splitter';
 import { TitleBar } from './shell/TitleBar';
-import { darkTheme, lightTheme, THEME_CHOICES, type ThemeChoice } from './theme';
+import { barBackground, darkTheme, lightTheme, THEME_CHOICES, type ThemeChoice } from './theme';
 import { useSystemDarkMode } from './useSystemDarkMode';
 
 const useStyles = makeStyles({
@@ -70,10 +70,10 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   }, []);
   useEffect(() => {
     window.outlo.window.setTitleBarColors({
-      background: theme.colorNeutralBackground3,
+      background: barBackground(dark),
       symbols: theme.colorNeutralForeground1,
     });
-  }, [theme]);
+  }, [theme, dark]);
 
   const { mailboxes, error } = useMailboxes();
   const [chosenFolderId, setChosenFolderId] = useState<number>();
@@ -110,9 +110,14 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const noAccounts = !session.demo && mailboxes?.accounts.length === 0;
   return (
     <FluentProvider theme={theme} className={styles.root}>
-      <TitleBar customFrame={titleBar === 'custom'} search={search} onSearch={setSearch} />
+      <TitleBar
+        customFrame={titleBar === 'custom'}
+        dark={dark}
+        search={search}
+        onSearch={setSearch}
+      />
       <div className={styles.body}>
-        <AppBar />
+        <AppBar dark={dark} />
         <div className={styles.main}>
           <Ribbon
             message={message}
