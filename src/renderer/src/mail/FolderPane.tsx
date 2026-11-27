@@ -1,4 +1,14 @@
-import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import {
+  Button,
+  makeStyles,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
+  mergeClasses,
+  tokens,
+} from '@fluentui/react-components';
 import {
   ArchiveRegular,
   ChevronDownRegular,
@@ -9,11 +19,12 @@ import {
   FolderRegular,
   MailArrowUpRegular,
   MailInboxRegular,
+  MoreHorizontalRegular,
   PersonAddRegular,
   SendRegular,
 } from '@fluentui/react-icons';
 import { useState, type ReactElement } from 'react';
-import type { Folder, FolderRole } from '@shared/api';
+import type { Account, Folder, FolderRole } from '@shared/api';
 import type { Mailboxes } from '../core/useFolders';
 import { t } from '../i18n';
 
@@ -46,6 +57,8 @@ const useStyles = makeStyles({
   name: { flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   count: { paddingRight: '10px', fontSize: tokens.fontSizeBase200 },
   unread: { color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold },
+  sectionRow: { display: 'flex', alignItems: 'center', paddingRight: '4px' },
+  none: { padding: '4px 0 4px 28px', color: tokens.colorNeutralForeground3 },
   divider: { height: '1px', margin: '8px 8px 8px 0', backgroundColor: tokens.colorNeutralStroke2 },
 });
 
@@ -63,9 +76,13 @@ interface FolderPaneProps {
   mailboxes: Mailboxes;
   selectedFolderId: number | undefined;
   onSelect(folderId: number): void;
+  // Missing in the demo, where accounts cannot be added or removed.
+  onAddAccount?: () => void;
+  onRemoveAccount?: (account: Account) => void;
 }
 
-export function FolderPane({ mailboxes, selectedFolderId, onSelect }: FolderPaneProps) {
+export function FolderPane(props: FolderPaneProps) {
+  const { mailboxes, selectedFolderId, onSelect, onAddAccount, onRemoveAccount } = props;
   const styles = useStyles();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string) =>
@@ -82,17 +99,38 @@ export function FolderPane({ mailboxes, selectedFolderId, onSelect }: FolderPane
   const accountEmail = (accountId: number) =>
     mailboxes.accounts.find((account) => account.id === accountId)?.email ?? '';
 
-  const section = (key: string, label: string) => (
-    <button
-      type="button"
-      className={mergeClasses(styles.row, styles.section)}
-      onClick={() => toggle(key)}
-    >
-      <span className={styles.chevron}>
-        {collapsed.has(key) ? <ChevronRightRegular /> : <ChevronDownRegular />}
-      </span>
-      <span className={styles.name}>{label}</span>
-    </button>
+  const section = (key: string, label: string, account?: Account) => (
+    <div className={styles.sectionRow}>
+      <button
+        type="button"
+        className={mergeClasses(styles.row, styles.section)}
+        onClick={() => toggle(key)}
+      >
+        <span className={styles.chevron}>
+          {collapsed.has(key) ? <ChevronRightRegular /> : <ChevronDownRegular />}
+        </span>
+        <span className={styles.name}>{label}</span>
+      </button>
+      {account && onRemoveAccount && (
+        <Menu>
+          <MenuTrigger disableButtonEnhancement>
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<MoreHorizontalRegular />}
+              aria-label={t('folders.accountMenu')}
+            />
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              <MenuItem icon={<DeleteRegular />} onClick={() => onRemoveAccount(account)}>
+                {t('folders.removeAccount')}
+              </MenuItem>
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+      )}
+    </div>
   );
 
   const folderRow = (folder: Folder, depth: number, label = folder.name, key = `f${folder.id}`) => {
@@ -147,12 +185,23 @@ export function FolderPane({ mailboxes, selectedFolderId, onSelect }: FolderPane
       )}
       {mailboxes.accounts.map((account) => (
         <div key={account.id}>
-          {section(`account${account.id}`, account.email)}
-          {!collapsed.has(`account${account.id}`) && tree(account.id, null, 0)}
+          {section(`account${account.id}`, account.email, account)}
+          {!collapsed.has(`account${account.id}`) &&
+            (children(null, account.id).length > 0 ? (
+              tree(account.id, null, 0)
+            ) : (
+              <div className={styles.none}>{t('folders.none')}</div>
+            ))}
         </div>
       ))}
       <div className={styles.divider} />
-      <button type="button" className={styles.row} style={{ paddingLeft: 8 }} disabled>
+      <button
+        type="button"
+        className={styles.row}
+        style={{ paddingLeft: 8 }}
+        disabled={!onAddAccount}
+        onClick={onAddAccount}
+      >
         <span className={styles.icon}>
           <PersonAddRegular />
         </span>

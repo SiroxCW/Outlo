@@ -3,6 +3,7 @@ import {
   MAX_TIME_BOUNDARIES,
   type CoreEvents,
   type CoreRequests,
+  type HostRequests,
   type MessageFilter,
 } from '@shared/api';
 import { createServer, type Endpoint } from '@shared/rpc';
@@ -109,6 +110,28 @@ export function createCore(options: CoreOptions) {
     },
   });
 
+  // Only the main process is connected to this one. The UI cannot call these methods.
+  const hostServer = createServer<HostRequests, Record<string, never>>({
+    'accounts.add': (params) => {
+      const input = check.record(params, 'params');
+      const id = store.addAccount(
+        check.oneOf(input.provider, 'provider', ['graph'] as const),
+        check.text(input.remoteId, 'remoteId', 200),
+        check.text(input.email, 'email', 320),
+        check.text(input.displayName, 'displayName', 200),
+      );
+      server.emit('accounts.changed', undefined);
+      return { id };
+    },
+
+    'accounts.remove': (params) => {
+      const remoteId = store.removeAccount(check.id(check.record(params, 'params').id, 'id'));
+      server.emit('accounts.changed', undefined);
+      server.emit('folders.changed', undefined);
+      return { remoteId };
+    },
+  });
+
   function announce(folderIds: number[], countsChanged: boolean): void {
     if (folderIds.length === 0) return;
     server.emit('messages.changed', { folderIds });
@@ -152,6 +175,7 @@ export function createCore(options: CoreOptions) {
 
   return {
     connect: (endpoint: Endpoint) => server.connect(endpoint),
+    connectHost: (endpoint: Endpoint) => hostServer.connect(endpoint),
     seedDemoData,
     close(): void {
       closed = true;

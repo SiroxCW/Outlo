@@ -1,7 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
   CORE_PORT,
+  ACCOUNTS_ADD_MICROSOFT,
+  ACCOUNTS_CANCEL_ADD,
+  ACCOUNTS_REMOVE,
   CORE_PORT_REQUEST,
+  SESSION_GET_INFO,
+  SESSION_SET_DEMO,
   WINDOW_GET_TITLE_BAR,
   WINDOW_SET_COLORS,
   WINDOW_SET_TITLE_BAR,
@@ -38,6 +43,15 @@ const bridge: OutloBridge = {
     getTitleBarStyle: () => ipcRenderer.invoke(WINDOW_GET_TITLE_BAR),
     setTitleBarStyle: (style) => ipcRenderer.invoke(WINDOW_SET_TITLE_BAR, style),
     setTitleBarColors: (colors) => ipcRenderer.send(WINDOW_SET_COLORS, colors),
+  },
+  accounts: {
+    addMicrosoft: () => ipcRenderer.invoke(ACCOUNTS_ADD_MICROSOFT),
+    cancelAdd: () => ipcRenderer.send(ACCOUNTS_CANCEL_ADD),
+    remove: (accountId) => ipcRenderer.invoke(ACCOUNTS_REMOVE, accountId),
+  },
+  session: {
+    getInfo: () => ipcRenderer.invoke(SESSION_GET_INFO),
+    setDemo: (demo) => ipcRenderer.invoke(SESSION_SET_DEMO, demo),
   },
 };
 contextBridge.exposeInMainWorld('outlo', bridge);

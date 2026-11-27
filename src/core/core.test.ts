@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CoreEvent, CoreEvents, CoreRequests } from '@shared/api';
+import type { CoreEvent, CoreEvents, CoreRequests, HostRequests } from '@shared/api';
 import { createEndpointPair } from '@shared/memory-endpoint';
 import { createClient } from '@shared/rpc';
 import { createCore } from './core';
@@ -163,5 +163,55 @@ describe('settings', () => {
     await expect(raw('settings.set', { key: 'demo.seeded', value: '1' })).rejects.toThrow('ui.');
     await expect(raw('settings.set', { key: 'ui.x y', value: '1' })).rejects.toThrow('ui.');
     expect(await client.request('settings.get', undefined)).toEqual({});
+  });
+});
+
+describe('accounts through the main process', () => {
+  function startWithHost() {
+    const context = start();
+    const [hostSide, coreSide] = createEndpointPair();
+    context.core.connectHost(coreSide);
+    const host = createClient<HostRequests>(hostSide);
+    return { ...context, host };
+  }
+  const account = {
+    provider: 'graph',
+    remoteId: 'home-1',
+    email: 'a@b.example',
+    displayName: 'A B',
+  } as const;
+
+  it('adds an account once and tells the UI', async () => {
+    const { host, client, events } = startWithHost();
+    const first = await host.request('accounts.add', account);
+    const again = await host.request('accounts.add', { ...account, displayName: 'Changed' });
+    await settle();
+    expect(again).toEqual(first);
+    expect(await client.request('accounts.list', undefined)).toEqual([
+      { id: first.id, provider: 'graph', email: 'a@b.example', displayName: 'A B' },
+    ]);
+    expect(events).toContainEqual({ type: 'accounts.changed', payload: undefined });
+  });
+
+  it('puts a new account after the existing ones', async () => {
+    const { host, client } = startWithHost();
+    await host.request('accounts.add', account);
+    await host.request('accounts.add', { ...account, remoteId: 'home-2', email: 'c@d.example' });
+    const emails = (await client.request('accounts.list', undefined)).map((entry) => entry.email);
+    expect(emails).toEqual(['a@b.example', 'c@d.example']);
+  });
+
+  it('removes an account and returns its ID at the provider', async () => {
+    const { host, client } = startWithHost();
+    const { id } = await host.request('accounts.add', account);
+    expect(await host.request('accounts.remove', { id })).toEqual({ remoteId: 'home-1' });
+    expect(await client.request('accounts.list', undefined)).toEqual([]);
+    expect(await host.request('accounts.remove', { id })).toEqual({ remoteId: null });
+  });
+
+  it('does not offer these methods to the UI', async () => {
+    const { raw } = startWithHost();
+    await expect(raw('accounts.add', account)).rejects.toThrow('Unknown method');
+    await expect(raw('accounts.remove', { id: 1 })).rejects.toThrow('Unknown method');
   });
 });

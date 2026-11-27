@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import {
   TITLE_BAR_HEIGHT,
   WINDOW_GET_TITLE_BAR,
@@ -9,7 +9,7 @@ import {
   type TitleBarStyle,
 } from '@shared/api';
 import icon from '../../resources/icons/256x256.png?asset';
-import { isRendererUrl, rendererUrl } from './renderer-site';
+import { isTrustedSender, rendererUrl } from './renderer-site';
 import { readTitleBarStyle, writeTitleBarStyle } from './window-settings';
 
 const COLOR = /^#[0-9a-f]{6}$/i;
@@ -55,11 +55,6 @@ export function createMainWindow(): BrowserWindow {
   return window;
 }
 
-function isTrusted(event: IpcMainInvokeEvent | Electron.IpcMainEvent): boolean {
-  const frame = event.senderFrame;
-  return frame !== null && frame === event.sender.mainFrame && isRendererUrl(frame.url);
-}
-
 export function handleWindowRequests(): void {
   ipcMain.handle(WINDOW_GET_TITLE_BAR, (event): TitleBarStyle => {
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -67,7 +62,7 @@ export function handleWindowRequests(): void {
   });
 
   ipcMain.handle(WINDOW_SET_TITLE_BAR, (event, style: TitleBarStyle) => {
-    if (!isTrusted(event) || (style !== 'custom' && style !== 'native')) return;
+    if (!isTrustedSender(event) || (style !== 'custom' && style !== 'native')) return;
     if (style === readTitleBarStyle()) return;
     writeTitleBarStyle(style);
 
@@ -82,7 +77,7 @@ export function handleWindowRequests(): void {
 
   ipcMain.on(WINDOW_SET_COLORS, (event, colors: TitleBarColors) => {
     const window = BrowserWindow.fromWebContents(event.sender);
-    if (!isTrusted(event) || !window || !customFrames.has(window)) return;
+    if (!isTrustedSender(event) || !window || !customFrames.has(window)) return;
     if (!COLOR.test(colors?.background) || !COLOR.test(colors?.symbols)) return;
     window.setTitleBarOverlay({
       color: colors.background,

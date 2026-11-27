@@ -102,4 +102,11 @@ export const MIGRATIONS: string[] = [
     VALUES (new.id, new.subject, new.from_name, new.from_address, new.preview);
   END;
   `,
+
+  // The ID of an account at its provider, so a second sign-in finds the account again.
+  `
+  ALTER TABLE accounts ADD COLUMN remote_id TEXT;
+  CREATE UNIQUE INDEX accounts_by_remote_id ON accounts(provider, remote_id)
+    WHERE remote_id IS NOT NULL;
+  `,
 ];

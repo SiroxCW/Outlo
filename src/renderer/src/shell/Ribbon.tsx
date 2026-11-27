@@ -26,6 +26,7 @@ import {
   PinRegular,
   PrintRegular,
   TagRegular,
+  BeakerRegular,
   WindowRegular,
 } from '@fluentui/react-icons';
 import { useState, type ReactElement, type ReactNode } from 'react';
@@ -88,6 +89,8 @@ interface RibbonProps {
   onSetFlagged(isFlagged: boolean): void;
   onTheme(theme: ThemeChoice): void;
   onTitleBar(style: TitleBarStyle): void;
+  demo: boolean;
+  onDemo(demo: boolean): void;
 }
 
 function Group({ label, children }: { label: string; children: ReactNode }) {
@@ -241,6 +244,17 @@ export function Ribbon(props: RibbonProps) {
               onClick={() => props.onTitleBar(props.titleBar === 'native' ? 'custom' : 'native')}
             >
               {t('ribbon.systemTitleBar')}
+            </ToggleButton>
+          </Group>
+          <Group label={t('ribbon.session')}>
+            <ToggleButton
+              size="small"
+              appearance="subtle"
+              icon={<BeakerRegular />}
+              checked={props.demo}
+              onClick={() => props.onDemo(!props.demo)}
+            >
+              {t('ribbon.demo')}
             </ToggleButton>
           </Group>
         </div>

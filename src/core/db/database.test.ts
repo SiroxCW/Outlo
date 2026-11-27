@@ -105,3 +105,27 @@ describe('openDatabase', () => {
     second.close();
   });
 });
+
+describe('schema', () => {
+  it('upgrades a version 1 database and keeps its data', () => {
+    const db = new DatabaseSync(':memory:');
+    migrate(db, MIGRATIONS.slice(0, 1));
+    db.exec(
+      "INSERT INTO accounts (provider, email, display_name) VALUES ('demo', 'a@b.example', 'A')",
+    );
+    migrate(db);
+    expect(version(db)).toBe(MIGRATIONS.length);
+    expect(db.prepare('SELECT email, remote_id FROM accounts').all()).toEqual([
+      { email: 'a@b.example', remote_id: null },
+    ]);
+  });
+
+  it('does not allow the same account of a provider twice', () => {
+    const db = new DatabaseSync(':memory:');
+    migrate(db);
+    const insert =
+      "INSERT INTO accounts (provider, remote_id, email, display_name) VALUES ('graph', 'x', 'a', 'A')";
+    db.exec(insert);
+    expect(() => db.exec(insert)).toThrow();
+  });
+});

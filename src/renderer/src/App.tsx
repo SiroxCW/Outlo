@@ -1,9 +1,21 @@
-import { FluentProvider, makeStyles, tokens } from '@fluentui/react-components';
+import {
+  Button,
+  FluentProvider,
+  makeStyles,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
+  tokens,
+} from '@fluentui/react-components';
 import { useEffect, useRef, useState } from 'react';
-import type { MessageFilter, TitleBarStyle } from '@shared/api';
+import type { Account, MessageFilter, SessionInfo, TitleBarStyle } from '@shared/api';
+import { AddAccountDialog } from './accounts/AddAccountDialog';
+import { RemoveAccountDialog } from './accounts/RemoveAccountDialog';
+import { Welcome } from './accounts/Welcome';
 import { useMessageList } from './core/messageList';
 import { useMailboxes } from './core/useFolders';
 import { useMessage } from './core/useMessage';
+import { useSession } from './core/useSession';
 import { useSettings, type Settings } from './core/useSettings';
 import { t } from './i18n';
 import { FolderPane } from './mail/FolderPane';
@@ -36,10 +48,11 @@ const useStyles = makeStyles({
     overflow: 'hidden',
   },
   reading: { flexGrow: 1, minWidth: 0 },
+  banner: { flexShrink: 0, margin: '8px 8px 0' },
   error: { padding: '24px', color: tokens.colorPaletteRedForeground1 },
 });
 
-function Shell({ settings }: { settings: Settings }) {
+function Shell({ settings, session }: { settings: Settings; session: SessionInfo }) {
   const styles = useStyles();
   const systemDark = useSystemDarkMode();
   const saved = settings.get('theme', 'system') as ThemeChoice;
@@ -68,6 +81,9 @@ function Shell({ settings }: { settings: Settings }) {
   const [selectedId, setSelectedId] = useState<number>();
   const [search, setSearch] = useState('');
   const [foldersVisible, setFoldersVisible] = useState(true);
+  const [addingAccount, setAddingAccount] = useState(false);
+  const [removing, setRemoving] = useState<Account>();
+  const setDemo = (demo: boolean) => void window.outlo.session.setDemo(demo);
   const [folderWidth, setFolderWidth] = useState(() => Number(settings.get('folderWidth', '240')));
   const [listWidth, setListWidth] = useState(() => Number(settings.get('listWidth', '360')));
 
@@ -91,6 +107,7 @@ function Shell({ settings }: { settings: Settings }) {
   }, [message]);
 
   const searching = search.trim() !== '';
+  const noAccounts = !session.demo && mailboxes?.accounts.length === 0;
   return (
     <FluentProvider theme={theme} className={styles.root}>
       <TitleBar customFrame={titleBar === 'custom'} search={search} onSearch={setSearch} />
@@ -112,63 +129,93 @@ function Shell({ settings }: { settings: Settings }) {
             }
             onTheme={(choice) => settings.set('theme', choice)}
             onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
+            demo={session.demo}
+            onDemo={setDemo}
           />
-          <div className={styles.content}>
-            {foldersVisible && mailboxes && (
-              <>
-                <div className={styles.pane} style={{ width: folderWidth }}>
-                  <FolderPane
-                    mailboxes={mailboxes}
-                    selectedFolderId={searching ? undefined : folder?.id}
-                    onSelect={(folderId) => {
-                      setChosenFolderId(folderId);
-                      setSelectedId(undefined);
-                      setSearch('');
-                    }}
+          {session.demo && (
+            <MessageBar className={styles.banner}>
+              <MessageBarBody>{t('demo.banner')}</MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => setDemo(false)}>
+                  {t('demo.leave')}
+                </Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {noAccounts ? (
+            <div className={styles.content}>
+              <Welcome onAddAccount={() => setAddingAccount(true)} onDemo={() => setDemo(true)} />
+            </div>
+          ) : (
+            <div className={styles.content}>
+              {foldersVisible && mailboxes && (
+                <>
+                  <div className={styles.pane} style={{ width: folderWidth }}>
+                    <FolderPane
+                      mailboxes={mailboxes}
+                      onAddAccount={session.demo ? undefined : () => setAddingAccount(true)}
+                      onRemoveAccount={session.demo ? undefined : setRemoving}
+                      selectedFolderId={searching ? undefined : folder?.id}
+                      onSelect={(folderId) => {
+                        setChosenFolderId(folderId);
+                        setSelectedId(undefined);
+                        setSearch('');
+                      }}
+                    />
+                  </div>
+                  <Splitter
+                    width={folderWidth}
+                    min={160}
+                    max={420}
+                    onResize={setFolderWidth}
+                    onCommit={(width) => settings.set('folderWidth', String(width))}
                   />
-                </div>
-                <Splitter
-                  width={folderWidth}
-                  min={160}
-                  max={420}
-                  onResize={setFolderWidth}
-                  onCommit={(width) => settings.set('folderWidth', String(width))}
-                />
-              </>
-            )}
-            <div className={`${styles.pane} ${styles.card}`} style={{ width: listWidth }}>
-              {error && <div className={styles.error}>{`${t('error.core')}: ${error}`}</div>}
-              {searching ? (
-                <SearchResults
-                  query={search}
-                  selectedId={selectedId}
-                  onSelect={(selected) => setSelectedId(selected.id)}
-                />
-              ) : (
-                <MessageList
-                  folder={folder}
-                  filter={filter}
-                  source={source}
-                  state={state}
-                  selectedId={selectedId}
-                  onFilter={setInboxFilter}
-                  onSelect={(selected) => setSelectedId(selected.id)}
-                />
+                </>
               )}
+              <div className={`${styles.pane} ${styles.card}`} style={{ width: listWidth }}>
+                {error && <div className={styles.error}>{`${t('error.core')}: ${error}`}</div>}
+                {searching ? (
+                  <SearchResults
+                    query={search}
+                    selectedId={selectedId}
+                    onSelect={(selected) => setSelectedId(selected.id)}
+                  />
+                ) : (
+                  <MessageList
+                    folder={folder}
+                    filter={filter}
+                    source={source}
+                    state={state}
+                    selectedId={selectedId}
+                    onFilter={setInboxFilter}
+                    onSelect={(selected) => setSelectedId(selected.id)}
+                  />
+                )}
+              </div>
+              <Splitter
+                width={listWidth}
+                min={280}
+                max={720}
+                onResize={setListWidth}
+                onCommit={(width) => settings.set('listWidth', String(width))}
+              />
+              <div className={styles.reading}>
+                <ReadingPane message={message} dark={dark} />
+              </div>
             </div>
-            <Splitter
-              width={listWidth}
-              min={280}
-              max={720}
-              onResize={setListWidth}
-              onCommit={(width) => settings.set('listWidth', String(width))}
-            />
-            <div className={styles.reading}>
-              <ReadingPane message={message} dark={dark} />
-            </div>
-          </div>
+          )}
         </div>
       </div>
+      {addingAccount && (
+        <AddAccountDialog
+          secureStorage={session.secureStorage}
+          onAdded={() => setAddingAccount(false)}
+          onClose={() => setAddingAccount(false)}
+        />
+      )}
+      {removing && (
+        <RemoveAccountDialog account={removing} onClose={() => setRemoving(undefined)} />
+      )}
     </FluentProvider>
   );
 }
@@ -176,5 +223,6 @@ function Shell({ settings }: { settings: Settings }) {
 export function App() {
   // The settings decide the theme, so nothing is drawn before they have arrived.
   const settings = useSettings();
-  return settings ? <Shell settings={settings} /> : null;
+  const session = useSession();
+  return settings && session ? <Shell settings={settings} session={session} /> : null;
 }

@@ -271,6 +271,28 @@ export class MailStore {
     return Number(result.lastInsertRowid);
   }
 
+  // Returns the existing account when this one was added before.
+  addAccount(provider: string, remoteId: string, email: string, displayName: string): number {
+    const existing = this.sql('SELECT id FROM accounts WHERE provider = ? AND remote_id = ?').get(
+      provider,
+      remoteId,
+    );
+    if (existing) return existing.id as number;
+
+    const order = this.sql('SELECT coalesce(max(sort_order), -1) + 1 AS next FROM accounts').get();
+    const result = this.sql(
+      `INSERT INTO accounts (provider, remote_id, email, display_name, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(provider, remoteId, email, displayName, order!.next as number);
+    return Number(result.lastInsertRowid);
+  }
+
+  // Deletes the account with its folders and messages. Returns its ID at the provider.
+  removeAccount(id: number): string | null {
+    const row = this.sql('DELETE FROM accounts WHERE id = ? RETURNING remote_id').get(id);
+    return row ? (row.remote_id as string | null) : null;
+  }
+
   deleteAllAccounts(): void {
     this.db.exec('DELETE FROM accounts');
   }

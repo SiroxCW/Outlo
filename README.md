@@ -16,6 +16,7 @@ npm run dev
 | Command             | What it does                                                          |
 | ------------------- | --------------------------------------------------------------------- |
 | `npm run dev`       | Starts the app with hot reload                                        |
+| `npm run dev:demo`  | Starts the app with hot reload on the demo data                       |
 | `npm test`          | Runs the unit tests                                                   |
 | `npm run lint`      | Checks the code with ESLint                                           |
 | `npm run typecheck` | Checks the types                                                      |
@@ -25,7 +26,7 @@ npm run dev
 
 Building the .deb and .rpm packages on Fedora needs the `libxcrypt-compat` package.
 
-Until real accounts are supported, the app fills itself with invented demo data on the first start. A development build keeps it in `~/.config/outlo-dev`. Delete that folder to start again from nothing.
+The app starts without accounts. "Open the demo" on the first screen fills it with invented mail, and so does `npm run dev:demo`. The demo has a database of its own and never mixes with real accounts. A development build keeps its data in `~/.config/outlo-dev`. Delete that folder to start again from nothing.
 
 The Flatpak manifest is in `packaging/flatpak/`. It is a first working version and not yet ready for Flathub.
 

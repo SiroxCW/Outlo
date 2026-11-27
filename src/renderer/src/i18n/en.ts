@@ -37,6 +37,45 @@ export const en = {
 
   'folders.favorites': 'Favorites',
   'folders.addAccount': 'Add account',
+  'folders.none': 'No folders yet',
+  'folders.accountMenu': 'Account options',
+  'folders.removeAccount': 'Remove account',
+
+  'welcome.title': 'Welcome to Outlo Mail',
+  'welcome.text': 'Add your first account to get started. Your mail stays on this computer.',
+  'welcome.demo': 'Open the demo',
+  'welcome.demoHint': 'The demo shows the app with invented mail. No account is needed.',
+
+  'demo.banner': 'This is the demo. All accounts and messages are invented.',
+  'demo.leave': 'Leave the demo',
+  'ribbon.session': 'Session',
+  'ribbon.demo': 'Demo',
+
+  'add.title': 'Add account',
+  'add.text': 'The sign-in opens in your web browser. Outlo Mail never sees your password.',
+  'add.microsoft': 'Sign in with Microsoft',
+  'add.others': 'Gmail and other providers follow in a later version.',
+  'add.noKeyring':
+    'No keyring was found on this system. Your sign-in is stored on this computer with weak protection only.',
+  'add.waitingTitle': 'Continue in your browser',
+  'add.waiting':
+    'Sign in on the page that just opened. This window continues on its own afterwards.',
+  'add.blockedTitle': 'Your organization has to approve Outlo Mail',
+  'add.blocked':
+    'Your organization does not let its members connect mail apps on their own. An administrator can approve Outlo Mail once for everyone by opening this address:',
+  'add.blockedHint': 'After the approval, add the account again.',
+  'add.copy': 'Copy address',
+  'add.copied': 'Copied',
+  'add.failedTitle': 'The sign-in did not work',
+  'add.retry': 'Try again',
+
+  'remove.title': 'Remove this account?',
+  'remove.text':
+    'Its mail and its sign-in are deleted from this computer. Nothing changes at your mail provider.',
+  'remove.confirm': 'Remove',
+
+  'action.cancel': 'Cancel',
+  'action.close': 'Close',
 
   'list.focused': 'Focused',
   'list.other': 'Other',

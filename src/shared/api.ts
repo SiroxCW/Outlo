@@ -122,6 +122,44 @@ export type CoreRequest = <Method extends keyof CoreRequests>(
   params: CoreRequests[Method]['params'],
 ) => Promise<CoreRequests[Method]['result']>;
 
+// Requests that only the main process may send to the core, for example after a sign-in.
+export type HostRequests = {
+  // Adds the account, or returns the existing one if it was added before.
+  'accounts.add': {
+    params: { provider: 'graph'; remoteId: string; email: string; displayName: string };
+    result: { id: number };
+  };
+  // Deletes the account with all its local data. Returns its ID at the provider.
+  'accounts.remove': { params: { id: number }; result: { remoteId: string | null } };
+};
+
+export type AddAccountResult =
+  | { status: 'added'; accountId: number }
+  | { status: 'cancelled' }
+  // The organization of the account does not let its users approve the app themselves.
+  | { status: 'blocked'; adminConsentUrl: string }
+  | { status: 'failed'; message: string };
+
+// Account functions that need the main process: it runs the sign-in and keeps the secrets.
+export interface AccountsBridge {
+  addMicrosoft(): Promise<AddAccountResult>;
+  cancelAdd(): void;
+  remove(accountId: number): Promise<void>;
+}
+
+export interface SessionInfo {
+  // A demo session works on invented data in a database of its own.
+  demo: boolean;
+  // False when the system has no keyring, so sign-ins can only be stored weakly protected.
+  secureStorage: boolean;
+}
+
+export interface SessionBridge {
+  getInfo(): Promise<SessionInfo>;
+  // Switches between the demo and the real data. The window reloads.
+  setDemo(demo: boolean): Promise<void>;
+}
+
 export type TitleBarStyle = 'custom' | 'native';
 
 export interface TitleBarColors {
@@ -142,6 +180,8 @@ export interface OutloBridge {
   request: CoreRequest;
   subscribe(listener: (event: CoreEvent) => void): () => void;
   window: WindowBridge;
+  accounts: AccountsBridge;
+  session: SessionBridge;
 }
 
 export const MAX_PAGE_SIZE = 500;
@@ -151,6 +191,11 @@ export const TITLE_BAR_HEIGHT = 48;
 export const WINDOW_GET_TITLE_BAR = 'window:get-title-bar';
 export const WINDOW_SET_TITLE_BAR = 'window:set-title-bar';
 export const WINDOW_SET_COLORS = 'window:set-colors';
+export const ACCOUNTS_ADD_MICROSOFT = 'accounts:add-microsoft';
+export const ACCOUNTS_CANCEL_ADD = 'accounts:cancel-add';
+export const ACCOUNTS_REMOVE = 'accounts:remove';
+export const SESSION_GET_INFO = 'session:get-info';
+export const SESSION_SET_DEMO = 'session:set-demo';
 
 export const CORE_PORT_REQUEST = 'core-port-request';
 export const CORE_PORT = 'core-port';

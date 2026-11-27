@@ -1,9 +1,11 @@
 import { join } from 'node:path';
 import { app, session } from 'electron';
+import { handleAccountRequests } from './accounts';
 import { handleAppProtocol, registerAppScheme } from './app-protocol';
 import { startCore } from './core-process';
 import { hardenSession, hardenWebContents } from './security';
 import { createMainWindow, handleWindowRequests } from './window';
+import { readDemoSession } from './window-settings';
 
 // Lower case as usual on Linux, and a folder of its own for development builds.
 // --user-data-dir on the command line still wins.
@@ -24,7 +26,9 @@ app.on('window-all-closed', () => app.quit());
 void app.whenReady().then(() => {
   hardenSession(session.defaultSession);
   handleAppProtocol();
-  startCore();
+  // The demo is opened from inside the app, or with --demo for one start.
+  startCore({ demo: app.commandLine.hasSwitch('demo') || readDemoSession() });
   handleWindowRequests();
+  handleAccountRequests();
   createMainWindow();
 });

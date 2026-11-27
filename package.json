@@ -15,6 +15,7 @@
   },
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:demo": "electron-vite dev -- --demo",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
@@ -29,6 +30,7 @@
     "postinstall": "install-electron"
   },
   "devDependencies": {
+    "@azure/msal-node": "^7.2.3",
     "@eslint/js": "^10.0.1",
     "@fluentui/react-components": "^9.75.3",
     "@fluentui/react-icons": "^2.0.347",
