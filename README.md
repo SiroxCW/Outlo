@@ -1,6 +1,6 @@
-# Outlo
+# Outlo Mail
 
-Outlo is an open source mail client for the Linux desktop. It has the layout and the shortcuts you know from Outlook on Windows, and it works with Outlook.com, Microsoft 365, Gmail and any IMAP account.
+Outlo Mail is an open source mail client for the Linux desktop. It has the layout and the shortcuts you know from Outlook on Windows, and it works with Outlook.com, Microsoft 365, Gmail and any IMAP account.
 
 The project is in early development. There is no release yet.
 
@@ -40,8 +40,8 @@ resources/      icons
 
 ## License
 
-Outlo is free software under the GNU General Public License, version 3. See [LICENSE](LICENSE).
+Outlo Mail is free software under the GNU General Public License, version 3. See [LICENSE](LICENSE).
 
 The app includes the Selawik font by Microsoft under the SIL Open Font License. The licence text is in `src/renderer/public/fonts/LICENSE.txt`.
 
-Outlo is an independent project. It is not affiliated with, endorsed by or sponsored by Microsoft. Outlook and Microsoft are trademarks of the Microsoft group of companies.
+Outlo Mail is an independent project. It is not affiliated with, endorsed by or sponsored by Microsoft. Outlook and Microsoft are trademarks of the Microsoft group of companies.

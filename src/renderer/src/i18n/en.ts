@@ -1,5 +1,5 @@
 export const en = {
-  'app.name': 'Outlo',
+  'app.name': 'Outlo Mail',
   'search.placeholder': 'Search',
   'search.results': 'Results',
   'search.none': 'Nothing found',

@@ -1,5 +1,5 @@
 appId: io.github.siroxcw.outlo
-productName: Outlo
+productName: Outlo Mail
 artifactName: ${name}-${version}-${arch}.${ext}
 directories:
   output: dist
@@ -19,7 +19,7 @@ linux:
   synopsis: Mail client for the Linux desktop
   description: Mail client for the Linux desktop. Works with Outlook.com, Microsoft 365, Gmail and IMAP accounts.
   maintainer: SiroxCW <75880834+SiroxCW@users.noreply.github.com>
-  vendor: Outlo
+  vendor: Outlo Mail
   desktop:
     entry:
       Keywords: mail;email;e-mail;

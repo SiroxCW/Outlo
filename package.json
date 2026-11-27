@@ -1,6 +1,6 @@
 {
   "name": "outlo",
-  "productName": "Outlo",
+  "productName": "Outlo Mail",
   "version": "0.0.1",
   "description": "Mail client for the Linux desktop. Works with Outlook.com, Microsoft 365, Gmail and IMAP accounts.",
   "license": "GPL-3.0-only",
