@@ -4,9 +4,10 @@ import type { MessageSummary } from '@shared/api';
 import { useConversation } from '../core/useConversation';
 import { useMessage, type OpenMessage } from '../core/useMessage';
 import { t } from '../i18n';
-import { conversationTopic, formatListTime } from './format';
-import { MessageCard } from './MessageCard';
-import { ReadingPlaceholder } from './ReadingPane';
+import { Compose } from './Compose';
+import { conversationTopic, formatAddresses, formatListTime } from './format';
+import { MessageCard, type MessageCardProps } from './MessageCard';
+import { ReadingPlaceholder, type ReadingActions } from './ReadingPane';
 import { useReadingStyles } from './readingStyles';
 
 const useStyles = makeStyles({
@@ -43,11 +44,14 @@ const useStyles = makeStyles({
   unread: { fontWeight: tokens.fontWeightSemibold },
   muted: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   folder: { color: tokens.colorBrandForeground1, fontSize: tokens.fontSizeBase200 },
+  draft: { color: tokens.colorPaletteRedForeground1 },
+  // A draft alone in the pane fills it, like a new mail in Outlook.
+  alone: { flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' },
   time: { flexShrink: 0, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   loading: { padding: '24px' },
 });
 
-interface ConversationPaneProps {
+interface ConversationPaneProps extends ReadingActions {
   // The message the user picked, in the list or below an open conversation.
   selected: OpenMessage;
   dark: boolean;
@@ -64,6 +68,7 @@ export function ConversationPane({
   dark,
   listFolderId,
   folderNames,
+  ...actions
 }: ConversationPaneProps) {
   const styles = useStyles();
   const reading = useReadingStyles();
@@ -136,6 +141,24 @@ export function ConversationPane({
         ) : (
           messages.map((entry) => {
             const onHeaderClick = several ? () => toggle(entry.id) : undefined;
+            // Drafts written here open in the editor, where they are in the conversation.
+            if (open.has(entry.id) && entry.isDraft) {
+              return (
+                <div
+                  key={entry.id}
+                  ref={entry.id === message.id ? selectedCard : undefined}
+                  className={several ? undefined : styles.alone}
+                >
+                  <Compose
+                    id={entry.id}
+                    size={several ? 'fit' : 'fill'}
+                    dark={dark}
+                    showFrom={actions.showFrom}
+                    onDiscarded={actions.onDiscarded}
+                  />
+                </div>
+              );
+            }
             if (!open.has(entry.id)) {
               return (
                 <FoldedMessage
@@ -156,6 +179,7 @@ export function ConversationPane({
                     size="fit"
                     folderName={folderOf(entry)}
                     onHeaderClick={onHeaderClick}
+                    onRespond={(kind) => actions.onRespond(kind, entry.id)}
                   />
                 </div>
               );
@@ -167,6 +191,7 @@ export function ConversationPane({
                 dark={dark}
                 folderName={folderOf(entry)}
                 onHeaderClick={onHeaderClick}
+                onRespond={(kind) => actions.onRespond(kind, entry.id)}
               />
             );
           })
@@ -190,7 +215,13 @@ function FoldedMessage({ message, folderName, onOpen }: FoldedMessageProps) {
       <Avatar name={sender} color="colorful" size={32} />
       <span className={styles.foldedText}>
         <span className={mergeClasses(styles.line, !message.isRead && styles.unread)}>
-          {sender}
+          {message.isDraft ? (
+            <>
+              <span className={styles.draft}>{t('list.draft')}</span> {formatAddresses(message.to)}
+            </>
+          ) : (
+            sender
+          )}
         </span>
         <span className={mergeClasses(styles.line, styles.muted)}>
           {folderName && <span className={styles.folder}>{folderName} </span>}
@@ -207,10 +238,11 @@ interface LoadedCardProps {
   dark: boolean;
   folderName: string | undefined;
   onHeaderClick: (() => void) | undefined;
+  onRespond: NonNullable<MessageCardProps['onRespond']>;
 }
 
 // An open message of the conversation other than the picked one, which the app loads already.
-function LoadedCard({ id, dark, folderName, onHeaderClick }: LoadedCardProps) {
+function LoadedCard({ id, dark, folderName, onHeaderClick, onRespond }: LoadedCardProps) {
   const styles = useStyles();
   const open = useMessage(id);
   const { message } = open;
@@ -234,6 +266,7 @@ function LoadedCard({ id, dark, folderName, onHeaderClick }: LoadedCardProps) {
       size="fit"
       folderName={folderName}
       onHeaderClick={onHeaderClick}
+      onRespond={onRespond}
     />
   );
 }

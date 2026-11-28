@@ -17,6 +17,7 @@ let events: string[];
 let token: () => Promise<string>;
 let inbox: string;
 let sent: string;
+let drafts: string;
 let projects: string;
 
 function createSync(): AccountSync {
@@ -59,7 +60,7 @@ beforeEach(() => {
   token = async () => 'token';
   inbox = graph.addFolder('Posteingang', { wellKnown: 'inbox' });
   sent = graph.addFolder('Gesendete Elemente', { wellKnown: 'sentitems' });
-  graph.addFolder('Entwürfe', { wellKnown: 'drafts' });
+  drafts = graph.addFolder('Entwürfe', { wellKnown: 'drafts' });
   projects = graph.addFolder('Projects');
 });
 
@@ -962,5 +963,253 @@ describe('log', () => {
     } finally {
       setUpLog(undefined);
     }
+  });
+});
+
+describe('drafts written here', () => {
+  const anna = { name: 'Anna Berg', address: 'anna@remote.example' };
+  const content = (text: string, subject = 'Plans') => ({
+    to: [anna],
+    cc: [],
+    bcc: [{ name: '', address: 'boss@remote.example' }],
+    subject,
+    text,
+  });
+  const posts = () => graph.requests.filter((request) => request === 'POST /me/messages');
+  const patches = () => graph.requests.filter((request) => request.startsWith('PATCH '));
+  const remoteIdOf = (id: number) => store.getRemoteMessage(id)?.remoteId;
+  const refuse = (status: number, test: (url: URL, method: string) => boolean) => {
+    graph.intercept = (url, method) =>
+      test(url, method)
+        ? new Response(JSON.stringify({ error: { code: 'Test', message: 'No' } }), { status })
+        : undefined;
+  };
+
+  beforeEach(() => {
+    graph.addFolder('Gelöschte Elemente', { wellKnown: 'deleteditems' });
+  });
+
+  it('makes a draft at the provider once it has text, and saves later versions over it', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    await settle(sync);
+    expect(posts()).toEqual([]);
+
+    store.saveDraft(id, content('<p>Hi Anna</p>'));
+    await settle(sync);
+    expect(posts()).toHaveLength(1);
+    const remoteId = remoteIdOf(id)!;
+    expect(graph.find(remoteId)).toMatchObject({
+      subject: 'Plans',
+      toRecipients: [{ emailAddress: anna }],
+    });
+    expect(graph.bccOf(remoteId)).toEqual([{ emailAddress: { address: 'boss@remote.example' } }]);
+    expect(graph.body(remoteId)!.content).toContain('<p style="margin: 0">Hi Anna</p>');
+
+    store.saveDraft(id, content('<p>Hi Anna, see you</p>'));
+    await settle(sync);
+    expect(patches()).toEqual([`PATCH /me/messages/${remoteId}`]);
+    expect(graph.body(remoteId)!.content).toContain('see you');
+
+    // The check of the Drafts folder finds the same draft, not a second one.
+    now += 6 * MINUTE;
+    await settle(sync);
+    const listed = store.listMessages(folder('Entwürfe').id, 'all', 0, 10).messages;
+    expect(listed).toMatchObject([{ id, subject: 'Plans', isDraft: true }]);
+    expect(store.hasDraftsToSend(accountId)).toBe(false);
+  });
+
+  it('keeps a draft while offline and makes it when the connection is back', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    store.saveDraft(id, content('<p>Written offline</p>'));
+    graph.offline = true;
+    await sync.stepSafely();
+    expect(sync.status().state).toBe('offline');
+
+    graph.offline = false;
+    now += MINUTE;
+    await settle(sync);
+    expect(graph.body(remoteIdOf(id)!)!.content).toContain('Written offline');
+  });
+
+  it('answers in the conversation of the message, with what the user wrote meanwhile', async () => {
+    const source = graph.addMessage(inbox, { subject: 'Plans', from: { emailAddress: anna } });
+    const sync = createSync();
+    await settle(sync);
+    const [sourceMessage] = store.listMessages(folder('Posteingang').id, 'all', 0, 10).messages;
+    const { id } = store.createDraft({ kind: 'reply', messageId: sourceMessage!.id })!;
+    expect(store.getDraft(id)).toMatchObject({ subject: 'RE: Plans', to: [anna] });
+
+    store.saveDraft(id, content('<p>First</p>', 'RE: Plans'));
+    // While the provider makes the answer, the user writes on.
+    graph.intercept = (url) => {
+      if (url.pathname.endsWith('/createReply')) {
+        graph.intercept = undefined;
+        store.saveDraft(id, content('<p>Second</p>', 'RE: Plans'));
+      }
+      return undefined;
+    };
+    await settle(sync);
+    const remoteId = remoteIdOf(id)!;
+    expect(graph.requests).toContain(`POST /me/messages/${source}/createReply`);
+    expect(posts()).toEqual([]);
+    expect(graph.find(remoteId)!.conversationId).toBe(`conversation-${source}`);
+    expect(graph.body(remoteId)!.content).toContain('Second');
+    expect(graph.body(remoteId)!.content).toContain('<b>From:</b> Anna Berg');
+    expect(store.hasDraftsToSend(accountId)).toBe(false);
+  });
+
+  it('makes an answer on its own when the message it answers is gone there', async () => {
+    const source = graph.addMessage(inbox, { subject: 'Plans' });
+    const sync = createSync();
+    await settle(sync);
+    const [sourceMessage] = store.listMessages(folder('Posteingang').id, 'all', 0, 10).messages;
+    graph.removeMessage(inbox, source);
+    const { id } = store.createDraft({ kind: 'replyAll', messageId: sourceMessage!.id })!;
+    store.saveDraft(id, content('<p>Still here</p>', 'RE: Plans'));
+    await settle(sync);
+    expect(posts()).toHaveLength(1);
+    expect(graph.body(remoteIdOf(id)!)!.content).toContain('Still here');
+  });
+
+  it('does not let the sync undo or remove a draft the provider does not have as it is here', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const first = store.createDraft({ kind: 'new', accountId })!.id;
+    store.saveDraft(first, content('<p>Saved</p>', 'Saved'));
+    await settle(sync);
+    const remoteId = remoteIdOf(first)!;
+
+    refuse(503, (_url, method) => method !== 'GET');
+    const second = store.createDraft({ kind: 'new', accountId })!.id;
+    store.saveDraft(second, content('<p>Waiting</p>', 'Waiting'));
+    store.saveDraft(first, content('<p>Newer</p>', 'Newer'));
+    // Open in the editor, nothing written yet.
+    const empty = store.createDraft({ kind: 'new', accountId })!.id;
+    // Meanwhile the server reports its older version, and its Drafts folder is read again.
+    graph.updateMessage(drafts, remoteId, { subject: 'Older elsewhere' });
+    graph.expireSyncState();
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Entwürfe').sort()).toEqual(['', 'Newer', 'Waiting']);
+    expect(folder('Entwürfe').totalCount).toBe(3);
+    store.closeDraft(empty);
+
+    graph.intercept = undefined;
+    now += 11 * MINUTE;
+    await settle(sync);
+    expect(graph.find(remoteId)!.subject).toBe('Newer');
+    expect(graph.find(remoteIdOf(second)!)!.subject).toBe('Waiting');
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Entwürfe').sort()).toEqual(['Newer', 'Waiting']);
+  });
+
+  it('makes a draft again that was sent or deleted elsewhere while the user wrote here', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    store.saveDraft(id, content('<p>One</p>'));
+    await settle(sync);
+    const before = remoteIdOf(id)!;
+
+    graph.removeMessage(drafts, before);
+    store.saveDraft(id, content('<p>Two</p>'));
+    // The server reports it gone before the new version reaches it.
+    refuse(503, (_url, method) => method === 'PATCH');
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Entwürfe')).toEqual(['Plans']);
+    graph.intercept = undefined;
+    now += MINUTE;
+    await settle(sync);
+    const after = remoteIdOf(id)!;
+    expect(after).not.toBe(before);
+    expect(graph.body(after)!.content).toContain('Two');
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Entwürfe')).toEqual(['Plans']);
+  });
+
+  it('throws drafts away: to Deleted Items there, for good when the provider never had them', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const kept = store.createDraft({ kind: 'new', accountId })!.id;
+    store.saveDraft(kept, content('<p>Kept</p>', 'Kept'));
+    await settle(sync);
+    const remoteId = remoteIdOf(kept)!;
+
+    graph.offline = true;
+    const never = store.createDraft({ kind: 'new', accountId })!.id;
+    store.saveDraft(never, content('<p>Never</p>', 'Never'));
+    store.discardDraft(kept);
+    store.discardDraft(never);
+    expect(subjects('Entwürfe')).toEqual([]);
+    expect(subjects('Gelöschte Elemente')).toEqual(['Kept']);
+    expect(store.getMessage(kept)!.isDraft).toBe(false);
+
+    graph.offline = false;
+    now += MINUTE;
+    await settle(sync);
+    expect(graph.requests).toContain(`POST /me/messages/${remoteId}/move`);
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('sends a draft thrown away while it was being made to Deleted Items there too', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    store.saveDraft(id, content('<p>Gone soon</p>'));
+    graph.intercept = (url, method) => {
+      if (method === 'POST' && url.pathname.endsWith('/me/messages')) {
+        graph.intercept = undefined;
+        store.discardDraft(id);
+      }
+      return undefined;
+    };
+    await settle(sync);
+    expect(graph.requests.filter((request) => request.endsWith('/move'))).toHaveLength(1);
+
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Entwürfe')).toEqual([]);
+    expect(subjects('Gelöschte Elemente')).toEqual(['Plans']);
+  });
+
+  it('moves a draft there that was moved here before the provider had it', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    store.saveDraft(id, content('<p>Filed</p>'));
+    store.moveMessages([id], folder('Projects').id);
+    await settle(sync);
+    expect(graph.requests).toContain(`POST /me/messages/${remoteIdOf(id)}/move`);
+
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Projects')).toEqual(['Plans']);
+    expect(subjects('Entwürfe')).toEqual([]);
+  });
+
+  it('tries a refused draft again later and keeps its text meanwhile', async () => {
+    const sync = createSync();
+    await settle(sync);
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    store.saveDraft(id, content('<p>Stubborn</p>'));
+    refuse(400, (_url, method) => method === 'POST');
+    await settle(sync);
+    expect(store.nextDraftAt(accountId)).toBe(now + 15_000);
+    now += 15_000;
+    await settle(sync);
+    expect(store.nextDraftAt(accountId)).toBe(now + 30_000);
+    expect(store.getDraft(id)!.text).toBe('<p>Stubborn</p>');
+
+    graph.intercept = undefined;
+    now += 30_000;
+    await settle(sync);
+    expect(graph.body(remoteIdOf(id)!)!.content).toContain('Stubborn');
   });
 });

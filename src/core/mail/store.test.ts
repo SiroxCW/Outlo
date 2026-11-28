@@ -131,6 +131,7 @@ describe('listMessages', () => {
       isFocused: true,
       hasAttachments: true,
       importance: 'high',
+      isDraft: false,
     });
   });
 });
@@ -600,6 +601,7 @@ describe('conversations', () => {
         { name: 'Anna Berg', address: 'anna.berg@bluepeak.example' },
         { name: 'Ben', address: 'ben@x.example' },
       ],
+      hasDraft: false,
     });
     // In Deleted Items the deleted message is part of it.
     const inDeleted = store.listMessages(deleted, 'all', 0, 10, grouped).messages[0];
@@ -614,6 +616,7 @@ describe('conversations', () => {
       isFlagged: true,
       hasAttachments: false,
       senders: [{ name: 'Anna Berg', address: 'anna.berg@bluepeak.example' }],
+      hasDraft: false,
     });
   });
 
@@ -642,6 +645,125 @@ describe('conversations', () => {
       )
       .all(inbox);
     expect(plan.map((row) => row.detail).join(' ')).toContain('messages_by_folder_thread');
+  });
+});
+
+describe('drafts', () => {
+  let drafts: number;
+  const anna = { name: 'Anna Berg', address: 'anna.berg@bluepeak.example' };
+  const ben = { name: 'Ben Ott', address: 'ben@bluepeak.example' };
+  const cara = { name: '', address: 'cara@bluepeak.example' };
+  const me = { name: 'Alex Morgan', address: 'alex@mailbox.example' };
+  const content = (text: string) => ({ to: [anna], cc: [], bcc: [], subject: 'Plans', text });
+
+  beforeEach(() => {
+    const base = { accountId, parentId: null, isFavorite: false };
+    drafts = store.insertFolder({ ...base, name: 'Drafts', role: 'drafts', sortOrder: 2 });
+  });
+
+  it('starts a new draft in the Drafts folder, empty and read', () => {
+    const created = store.createDraft({ kind: 'new', accountId }, 5_000)!;
+    expect(created.folderIds).toEqual([drafts]);
+    expect(store.getDraft(created.id)).toEqual({
+      id: created.id,
+      accountId,
+      kind: 'new',
+      from: me,
+      to: [],
+      cc: [],
+      bcc: [],
+      subject: '',
+      text: '',
+      quote: '',
+      sourceId: null,
+    });
+    const [listed] = store.listMessages(drafts, 'all', 0, 10).messages;
+    expect(listed).toMatchObject({
+      id: created.id,
+      isDraft: true,
+      isRead: true,
+      receivedAt: 5_000,
+    });
+    expect(folder(drafts).totalCount).toBe(1);
+  });
+
+  it('answers all in the conversation of the message and quotes it, without the user', () => {
+    const threadId = store.insertThread(accountId);
+    const source = add({ threadId, from: anna, to: [me, ben], cc: [cara, me] });
+    store.saveBody(
+      source,
+      {
+        contentType: 'html',
+        content:
+          '<html><head><style>.x{color:red}</style></head><body><p class="x">Numbers &amp; more</p></body></html>',
+      },
+      [],
+    );
+    const created = store.createDraft({ kind: 'replyAll', messageId: source })!;
+    // The list of the inbox shows that the conversation has a draft now.
+    expect(created.folderIds.sort()).toEqual([inbox, drafts].sort());
+    const { id } = created;
+    const draft = store.getDraft(id)!;
+    expect(draft).toMatchObject({
+      kind: 'replyAll',
+      to: [anna, ben],
+      cc: [cara],
+      subject: 'RE: Quarterly report',
+      sourceId: source,
+    });
+    expect(draft.quote).toContain('<b>From:</b> Anna Berg &lt;anna.berg@bluepeak.example&gt;');
+    expect(draft.quote).toContain(
+      '<style>.x{color:red}</style><p class="x">Numbers &amp; more</p>',
+    );
+    expect(store.getConversation(source, inbox).map((entry) => entry.id)).toEqual([id, source]);
+    const [row] = store.listMessages(inbox, 'all', 0, 10, { conversations: true }).messages;
+    expect(row).toMatchObject({
+      id: source,
+      conversation: { size: 2, hasDraft: true, senders: [anna] },
+    });
+    expect(store.closeDraft(id).sort()).toEqual([inbox, drafts].sort());
+  });
+
+  it('stores a new version only when something changed', () => {
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    expect(store.saveDraft(id, content('<p>Zebra crossing &amp; more</p>'), 9_000)).toEqual([
+      drafts,
+    ]);
+    expect(store.saveDraft(id, content('<p>Zebra crossing &amp; more</p>'))).toEqual([]);
+    expect(store.getDraftToSend(id)).toMatchObject({ version: 1, subject: 'Plans', to: [anna] });
+
+    const message = store.getMessage(id)!;
+    expect(message).toMatchObject({ subject: 'Plans', preview: 'Zebra crossing & more' });
+    expect(message.receivedAt).toBe(9_000);
+    expect(message.body!.content).toContain('<p style="margin: 0">Zebra crossing &amp; more</p>');
+    expect(store.search('zebra', 10).map((entry) => entry.id)).toEqual([id]);
+  });
+
+  it('removes a draft nobody wrote in when its editor closes, also after a restart', () => {
+    const untouched = store.createDraft({ kind: 'new', accountId })!.id;
+    const written = store.createDraft({ kind: 'new', accountId })!.id;
+    const left = store.createDraft({ kind: 'new', accountId })!.id;
+    store.saveDraft(written, content('<p>Hello</p>'));
+    expect(store.closeDraft(untouched)).toEqual([drafts]);
+    expect(store.closeDraft(written)).toEqual([]);
+    expect(store.removeUntouchedDrafts()).toEqual([drafts]);
+    expect(store.getDraft(left)).toBeNull();
+    expect(store.getDraft(written)).not.toBeNull();
+    expect(folder(drafts).totalCount).toBe(1);
+  });
+
+  it('throws away a draft the provider never had for good', () => {
+    const { id } = store.createDraft({ kind: 'new', accountId })!;
+    store.saveDraft(id, content('<p>Hello</p>'));
+    expect(store.discardDraft(id)).toEqual([drafts]);
+    expect(store.getMessage(id)).toBeNull();
+    expect(folder(drafts).totalCount).toBe(0);
+  });
+
+  it('starts no draft without a Drafts folder or a message to answer', () => {
+    expect(store.createDraft({ kind: 'reply', messageId: 12345 })).toBeNull();
+    db.exec(`DELETE FROM folders WHERE id = ${drafts}`);
+    expect(store.createDraft({ kind: 'new', accountId })).toBeNull();
   });
 });
 

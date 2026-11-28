@@ -4,6 +4,9 @@ import type {
   Address,
   Attachment,
   ConversationSummary,
+  Draft,
+  DraftContent,
+  DraftKind,
   Folder,
   FolderRole,
   Importance,
@@ -17,11 +20,19 @@ import type {
   MessagePage,
   MessageSort,
   MessageSummary,
+  ResponseKind,
   SortField,
 } from '@shared/api';
 import { MAX_CONVERSATION_SIZE } from '@shared/api';
 import { transaction, type Database } from '../db/database';
 import type { RemoteMessage } from '../graph/mapping';
+import {
+  buildQuote,
+  draftHtml,
+  draftPreview,
+  responseRecipients,
+  responseSubject,
+} from './compose';
 import { toFtsTerms } from './fts-query';
 import { bodyText } from './text';
 
@@ -47,7 +58,8 @@ type WaitingChanges = Partial<Record<OperationKind, WaitingChange>>;
 const SUMMARY_COLUMNS = `
   m.id, m.account_id, m.folder_id, m.thread_id, m.subject, m.preview, m.from_name,
   m.from_address, m.to_recipients, m.received_at, m.is_read, m.is_flagged, m.is_focused,
-  m.has_attachments, m.importance`;
+  m.has_attachments, m.importance,
+  EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id) AS is_draft`;
 
 export interface NewFolder {
   accountId: number;
@@ -121,6 +133,22 @@ export interface Operation {
   attempts: number;
 }
 
+// A draft as it goes to the provider.
+export interface DraftToSend {
+  messageId: number;
+  accountId: number;
+  remoteId: string | null;
+  kind: DraftKind;
+  sourceRemoteId: string | null;
+  version: number;
+  attempts: number;
+  subject: string;
+  to: Address[];
+  cc: Address[];
+  bcc: Address[];
+  html: string;
+}
+
 // What is needed to fetch an attachment from its provider or to write it to a file.
 export interface StoredAttachment {
   name: string;
@@ -170,6 +198,7 @@ function toSummary(row: Row): MessageSummary {
     isFocused: row.is_focused === 1,
     hasAttachments: row.has_attachments === 1,
     importance: IMPORTANCE[row.importance as number] ?? 'normal',
+    isDraft: row.is_draft === 1,
   };
 }
 
@@ -363,7 +392,8 @@ export class MailStore {
     const totals = new Map(
       this.sql(
         `SELECT m.thread_id, count(*) AS size, sum(m.folder_id = ? AND m.is_read = 0) AS unread,
-           max(m.is_flagged) AS flagged, max(m.has_attachments) AS files
+           max(m.is_flagged) AS flagged, max(m.has_attachments) AS files,
+           max(EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id)) AS drafts
          FROM messages m JOIN folders f ON f.id = m.folder_id WHERE ${inThreads}
          GROUP BY m.thread_id`,
       )
@@ -371,9 +401,11 @@ export class MailStore {
         .map((row) => [row.thread_id as number, row]),
     );
     const senders = new Map<number, Address[]>();
+    // A draft written here has not been sent by anyone yet.
     const rows = this.sql(
       `SELECT m.thread_id, m.from_name, m.from_address
        FROM messages m JOIN folders f ON f.id = m.folder_id WHERE ${inThreads}
+         AND NOT EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id)
        ORDER BY m.thread_id, m.received_at DESC, m.id DESC`,
     ).all(threadIds, folderId);
     for (const row of rows) {
@@ -394,6 +426,7 @@ export class MailStore {
             isFlagged: total.flagged === 1,
             hasAttachments: total.files === 1,
             senders: senders.get(message.threadId!) ?? [message.from],
+            hasDraft: total.drafts === 1,
           }
         : {
             size: 1,
@@ -401,6 +434,7 @@ export class MailStore {
             isFlagged: message.isFlagged,
             hasAttachments: message.hasAttachments,
             senders: [message.from],
+            hasDraft: message.isDraft,
           };
       return { ...message, conversation };
     });
@@ -633,38 +667,45 @@ export class MailStore {
   }
 
   private move(ids: number[], target: (accountId: number) => Row | undefined, now: number) {
+    return this.transaction(() => this.moveRows(ids, target, now));
+  }
+
+  private moveRows(
+    ids: number[],
+    target: (accountId: number) => Row | undefined,
+    now: number,
+  ): number[] {
     const find = this.sql(
       `SELECT m.account_id, m.folder_id, m.remote_id, m.is_read, f.remote_id AS folder_remote_id
        FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.id = ?`,
     );
     // The round of its new folder, so a round that runs there does not take it for gone.
     const update = this.sql('UPDATE messages SET folder_id = ?, sync_round = ? WHERE id = ?');
-    return this.transaction(() => {
-      const changed = new Set<number>();
-      for (const id of ids) {
-        const message = find.get(id);
-        if (!message) continue;
-        const accountId = message.account_id as number;
-        const from = message.folder_id as number;
-        const to = target(accountId);
-        if (!to || to.account_id !== accountId || to.id === from) continue;
-        // Mail of a provider can only go to a folder the provider knows.
-        const remoteId = message.remote_id as string | null;
-        if (remoteId !== null && (to.remote_id === null || message.folder_remote_id === null)) {
-          continue;
-        }
-        update.run(to.id as number, to.sync_round as number, id);
-        const unread = message.is_read ? 0 : 1;
-        this.addCounts(from, -1, -unread);
-        this.addCounts(to.id as number, 1, unread);
-        changed.add(from).add(to.id as number);
-        if (remoteId !== null) {
-          const before = message.folder_remote_id as string;
-          this.queue(accountId, 'move', remoteId, to.remote_id as string, before, now);
-        }
+    const changed = new Set<number>();
+    for (const id of ids) {
+      const message = find.get(id);
+      if (!message) continue;
+      const accountId = message.account_id as number;
+      const from = message.folder_id as number;
+      const to = target(accountId);
+      if (!to || to.account_id !== accountId || to.id === from) continue;
+      // Mail of a provider can only go to a folder the provider knows. A draft the provider does
+      // not have yet moves here only, and follows there once it was made.
+      const remoteId = message.remote_id as string | null;
+      if (remoteId !== null && (to.remote_id === null || message.folder_remote_id === null)) {
+        continue;
       }
-      return [...changed];
-    });
+      update.run(to.id as number, to.sync_round as number, id);
+      const unread = message.is_read ? 0 : 1;
+      this.addCounts(from, -1, -unread);
+      this.addCounts(to.id as number, 1, unread);
+      changed.add(from).add(to.id as number);
+      if (remoteId !== null) {
+        const before = message.folder_remote_id as string;
+        this.queue(accountId, 'move', remoteId, to.remote_id as string, before, now);
+      }
+    }
+    return [...changed];
   }
 
   private addCounts(folderId: number, total: number, unread: number): void {
@@ -871,7 +912,329 @@ export class MailStore {
       add(here.folder_id as number, 1, here.is_read ? 0 : 1);
       add(there, -1, unreadThere ? -1 : 0);
     }
+    // Drafts the provider has not made yet.
+    const drafts = this.sql(
+      `SELECT m.folder_id, m.is_read FROM messages m JOIN drafts d ON d.message_id = m.id
+       WHERE m.account_id = ? AND m.remote_id IS NULL`,
+    ).all(accountId);
+    for (const row of drafts) add(row.folder_id as number, 1, row.is_read ? 0 : 1);
     return counts;
+  }
+
+  // Drafts
+
+  // Starts a draft in the Drafts folder of an account. An answer or forward takes recipients,
+  // subject and conversation from its message, and quotes it below the text. Null when there is
+  // no such message or no Drafts folder.
+  createDraft(
+    request: { kind: 'new'; accountId: number } | { kind: ResponseKind; messageId: number },
+    now = Date.now(),
+  ): { id: number; folderIds: number[] } | null {
+    let accountId: number;
+    let source: Message | null = null;
+    if (request.kind === 'new') {
+      accountId = request.accountId;
+    } else {
+      source = this.getMessage(request.messageId);
+      if (!source) return null;
+      accountId = source.accountId;
+    }
+    const account = this.getAccount(accountId);
+    const folder = this.sql(
+      "SELECT id, sync_round FROM folders WHERE account_id = ? AND role = 'drafts'",
+    ).get(accountId);
+    if (!account || !folder) return null;
+
+    let recipients: { to: Address[]; cc: Address[] } = { to: [], cc: [] };
+    let subject = '';
+    let quote = '';
+    let sourceRemoteId: string | null = null;
+    if (source && request.kind !== 'new') {
+      recipients = responseRecipients(request.kind, source, account.email);
+      subject = responseSubject(request.kind, source.subject);
+      quote = buildQuote(source, source.body, source.preview);
+      sourceRemoteId = this.getRemoteMessage(source.id)?.remoteId ?? null;
+    }
+    return this.transaction(() => {
+      const id = this.insertMessage({
+        accountId,
+        folderId: folder.id as number,
+        threadId: source?.threadId ?? null,
+        subject,
+        preview: draftPreview('', quote),
+        from: { name: account.displayName, address: account.email },
+        ...recipients,
+        receivedAt: now,
+        isRead: true,
+        isFlagged: false,
+        isFocused: true,
+        hasAttachments: false,
+        importance: 'normal',
+      });
+      // A round that reads the folder from the start meanwhile must not take it for gone.
+      this.sql('UPDATE messages SET sync_round = ? WHERE id = ?').run(
+        folder.sync_round as number,
+        id,
+      );
+      this.sql(
+        `INSERT INTO drafts (message_id, kind, source_id, source_remote_id, quote)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(id, request.kind, source?.id ?? null, sourceRemoteId, quote);
+      this.writeDraftBody(id, '', quote);
+      this.addCounts(folder.id as number, 1, 0);
+      return { id, folderIds: this.threadFolders(id) };
+    });
+  }
+
+  getDraft(id: number): Draft | null {
+    const row = this.sql(
+      `SELECT d.*, m.account_id, m.subject, m.from_name, m.from_address, m.to_recipients,
+         m.cc_recipients FROM drafts d JOIN messages m ON m.id = d.message_id
+       WHERE d.message_id = ?`,
+    ).get(id);
+    if (!row) return null;
+    return {
+      id,
+      accountId: row.account_id as number,
+      kind: row.kind as DraftKind,
+      from: { name: row.from_name as string, address: row.from_address as string },
+      to: JSON.parse(row.to_recipients as string) as Address[],
+      cc: JSON.parse(row.cc_recipients as string) as Address[],
+      bcc: JSON.parse(row.bcc_recipients as string) as Address[],
+      subject: row.subject as string,
+      text: row.text as string,
+      quote: row.quote as string,
+      sourceId: row.source_id as number | null,
+    };
+  }
+
+  // Stores what the user wrote as a new version for the provider. Returns the folders whose
+  // content changed: none when nothing did.
+  saveDraft(id: number, content: DraftContent, now = Date.now()): number[] {
+    return this.transaction(() => {
+      const row = this.sql(
+        `SELECT d.text, d.quote, d.bcc_recipients, m.subject, m.to_recipients, m.cc_recipients,
+           m.folder_id, f.sync_round FROM drafts d JOIN messages m ON m.id = d.message_id
+         JOIN folders f ON f.id = m.folder_id WHERE d.message_id = ?`,
+      ).get(id);
+      if (!row) return [];
+      const people = (list: Address[]) =>
+        JSON.stringify(list.map(({ name, address }) => ({ name, address })));
+      const [to, cc, bcc] = [people(content.to), people(content.cc), people(content.bcc)];
+      const same =
+        row.text === content.text &&
+        row.subject === content.subject &&
+        row.to_recipients === to &&
+        row.cc_recipients === cc &&
+        row.bcc_recipients === bcc;
+      if (same) return [];
+      const quote = row.quote as string;
+      this.sql(
+        `UPDATE messages SET subject = ?, preview = ?, to_recipients = ?, cc_recipients = ?,
+           received_at = ?, sync_round = ? WHERE id = ?`,
+      ).run(
+        content.subject,
+        draftPreview(content.text, quote),
+        to,
+        cc,
+        now,
+        row.sync_round as number,
+        id,
+      );
+      this.sql(
+        `UPDATE drafts SET text = ?, bcc_recipients = ?, version = version + 1, attempts = 0,
+           next_attempt_at = 0 WHERE message_id = ?`,
+      ).run(content.text, bcc, id);
+      this.writeDraftBody(id, content.text, quote);
+      return [row.folder_id as number];
+    });
+  }
+
+  // The editor of a draft closed. A draft nobody wrote in goes: the provider never had it.
+  closeDraft(id: number): number[] {
+    return this.transaction(() => {
+      const folderIds = this.threadFolders(id);
+      const row = this.sql(
+        `DELETE FROM messages WHERE id = ?1 AND remote_id IS NULL
+           AND EXISTS (SELECT 1 FROM drafts WHERE message_id = ?1 AND version = 0)
+         RETURNING folder_id`,
+      ).get(id);
+      if (!row) return [];
+      this.addCounts(row.folder_id as number, -1, 0);
+      return folderIds;
+    });
+  }
+
+  // The folders with messages of the conversation of a message, which show whether it has a
+  // draft. The folder of the message itself is always among them.
+  private threadFolders(id: number): number[] {
+    return this.sql(
+      `SELECT DISTINCT folder_id FROM messages WHERE id = ?1
+         OR thread_id = (SELECT thread_id FROM messages WHERE id = ?1)`,
+    )
+      .all(id)
+      .map((row) => row.folder_id as number);
+  }
+
+  // Throws a draft away. One the provider has goes to Deleted Items like any message and can be
+  // found there. One the provider never had is removed.
+  discardDraft(id: number, now = Date.now()): number[] {
+    return this.transaction(() => {
+      const row = this.sql(
+        `SELECT m.remote_id, m.folder_id, m.is_read FROM messages m
+         JOIN drafts d ON d.message_id = m.id WHERE m.id = ?`,
+      ).get(id);
+      if (!row) return [];
+      const folderId = row.folder_id as number;
+      const folderIds = this.threadFolders(id);
+      if (row.remote_id === null) {
+        this.sql('DELETE FROM messages WHERE id = ?').run(id);
+        this.addCounts(folderId, -1, row.is_read ? 0 : -1);
+        return folderIds;
+      }
+      this.sql('DELETE FROM drafts WHERE message_id = ?').run(id);
+      const deleted = this.sql("SELECT * FROM folders WHERE account_id = ? AND role = 'deleted'");
+      const moved = this.moveRows([id], (accountId) => deleted.get(accountId), now);
+      return [...new Set([...folderIds, ...moved])];
+    });
+  }
+
+  // Drafts that were started but never written in, left behind when the app closed.
+  removeUntouchedDrafts(): number[] {
+    return this.transaction(() => {
+      const rows = this.sql(
+        `DELETE FROM messages WHERE remote_id IS NULL
+           AND id IN (SELECT message_id FROM drafts WHERE version = 0)
+         RETURNING folder_id`,
+      ).all();
+      for (const row of rows) this.addCounts(row.folder_id as number, -1, 0);
+      return [...new Set(rows.map((row) => row.folder_id as number))];
+    });
+  }
+
+  private writeDraftBody(messageId: number, text: string, quote: string): void {
+    const body: MessageBody = { contentType: 'html', content: draftHtml(text, quote) };
+    this.sql(
+      `INSERT INTO message_bodies (message_id, content_type, content) VALUES (?, ?, ?)
+       ON CONFLICT (message_id) DO UPDATE SET content_type = excluded.content_type,
+         content = excluded.content`,
+    ).run(messageId, body.contentType, body.content);
+    this.indexBody(messageId, body);
+  }
+
+  // The drafts of an account that the provider does not have as they are here, whose turn it is.
+  listDueDrafts(accountId: number, now: number, limit: number): DraftToSend[] {
+    return this.sql(
+      `SELECT d.message_id FROM drafts d JOIN messages m ON m.id = d.message_id
+       WHERE m.account_id = ? AND d.version > d.saved_version AND d.next_attempt_at <= ?
+       ORDER BY d.next_attempt_at, d.message_id LIMIT ?`,
+    )
+      .all(accountId, now, limit)
+      .flatMap((row) => this.getDraftToSend(row.message_id as number) ?? []);
+  }
+
+  getDraftToSend(id: number): DraftToSend | null {
+    const row = this.sql(
+      `SELECT d.*, m.account_id, m.remote_id, m.subject, m.to_recipients, m.cc_recipients
+       FROM drafts d JOIN messages m ON m.id = d.message_id WHERE d.message_id = ?`,
+    ).get(id);
+    if (!row) return null;
+    return {
+      messageId: id,
+      accountId: row.account_id as number,
+      remoteId: row.remote_id as string | null,
+      kind: row.kind as DraftKind,
+      sourceRemoteId: row.source_remote_id as string | null,
+      version: row.version as number,
+      attempts: row.attempts as number,
+      subject: row.subject as string,
+      to: JSON.parse(row.to_recipients as string) as Address[],
+      cc: JSON.parse(row.cc_recipients as string) as Address[],
+      bcc: JSON.parse(row.bcc_recipients as string) as Address[],
+      html: draftHtml(row.text as string, row.quote as string),
+    };
+  }
+
+  hasDraftsToSend(accountId: number): boolean {
+    return this.nextDraftAt(accountId) !== null;
+  }
+
+  // When the next draft is due for the provider, or null when the provider has all of them.
+  nextDraftAt(accountId: number): number | null {
+    const row = this.sql(
+      `SELECT min(d.next_attempt_at) AS next FROM drafts d JOIN messages m ON m.id = d.message_id
+       WHERE m.account_id = ? AND d.version > d.saved_version`,
+    ).get(accountId);
+    return (row?.next as number | null) ?? null;
+  }
+
+  // The provider made the draft, in its Drafts folder. If it is in another folder here, it is
+  // moved there too. False when the draft was thrown away meanwhile: then the one the provider
+  // just made goes to Deleted Items.
+  draftCreated(accountId: number, messageId: number, remoteId: string, now = Date.now()): boolean {
+    return this.transaction(() => {
+      const drafts = this.sql(
+        "SELECT id, remote_id FROM folders WHERE account_id = ? AND role = 'drafts'",
+      ).get(accountId);
+      // The sync may have brought the new draft in before its ID was known here.
+      const twin = this.sql(
+        'DELETE FROM messages WHERE account_id = ? AND remote_id = ? AND id <> ? RETURNING folder_id',
+      ).get(accountId, remoteId, messageId);
+      if (twin) this.addCounts(twin.folder_id as number, -1, 0);
+      const row = this.sql(
+        `UPDATE messages SET remote_id = ? WHERE id = ?
+         RETURNING folder_id, (SELECT remote_id FROM folders WHERE id = folder_id) AS folder_remote_id`,
+      ).get(remoteId, messageId);
+      const draftsRemoteId = drafts?.remote_id as string | null | undefined;
+      if (!draftsRemoteId) return row !== undefined;
+      if (!row) {
+        const deleted = this.sql(
+          "SELECT remote_id FROM folders WHERE account_id = ? AND role = 'deleted'",
+        ).get(accountId);
+        const target = deleted?.remote_id as string | null | undefined;
+        if (target) this.queue(accountId, 'move', remoteId, target, draftsRemoteId, now);
+        return false;
+      }
+      const here = row.folder_remote_id as string | null;
+      if (row.folder_id !== drafts!.id && here) {
+        this.queue(accountId, 'move', remoteId, here, draftsRemoteId, now);
+      }
+      return true;
+    });
+  }
+
+  // The provider has this version now. A newer one saved meanwhile still waits.
+  draftSaved(messageId: number, version: number): void {
+    this.sql(
+      `UPDATE drafts SET saved_version = max(saved_version, ?), attempts = 0, next_attempt_at = 0
+       WHERE message_id = ?`,
+    ).run(version, messageId);
+  }
+
+  delayDraft(messageId: number, until: number): void {
+    this.sql(
+      'UPDATE drafts SET attempts = attempts + 1, next_attempt_at = ? WHERE message_id = ?',
+    ).run(until, messageId);
+  }
+
+  // The provider has the draft no more: it was sent or deleted elsewhere while the user wrote
+  // here. It is made again, so the text is not lost.
+  draftGone(messageId: number): void {
+    this.sql('UPDATE messages SET remote_id = NULL WHERE id = ?').run(messageId);
+  }
+
+  // The message a draft answers is gone at the provider. The draft is made as a message of its own.
+  forgetDraftSource(messageId: number): void {
+    this.sql('UPDATE drafts SET source_remote_id = NULL WHERE message_id = ?').run(messageId);
+  }
+
+  // Drafts with a version the provider does not have yet, by their ID there.
+  private unsavedDrafts(accountId: number): Set<string> {
+    const rows = this.sql(
+      `SELECT m.remote_id FROM drafts d JOIN messages m ON m.id = d.message_id
+       WHERE m.account_id = ? AND m.remote_id IS NOT NULL AND d.version > d.saved_version`,
+    ).all(accountId);
+    return new Set(rows.map((row) => row.remote_id as string));
   }
 
   setSetting(key: string, value: string): void {
@@ -1102,12 +1465,15 @@ export class MailStore {
   }
 
   // Removes what a round from the start did not meet: it is no longer in the folder.
-  // A message moved here whose move the provider does not have yet is not gone.
+  // A message moved here whose move the provider does not have yet is not gone, and neither is
+  // a draft whose latest version, or the draft itself, the provider does not have yet.
   finishFolderRound(folderId: number, round: number): number {
     const result = this.sql(
-      `DELETE FROM messages WHERE folder_id = ? AND sync_round < ?
+      `DELETE FROM messages WHERE folder_id = ? AND sync_round < ? AND remote_id IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.account_id = messages.account_id
-           AND o.remote_id = messages.remote_id AND o.kind = 'move')`,
+           AND o.remote_id = messages.remote_id AND o.kind = 'move')
+         AND NOT EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = messages.id
+           AND d.version > d.saved_version)`,
     ).run(folderId, round);
     return Number(result.changes);
   }
@@ -1157,11 +1523,13 @@ export class MailStore {
     return this.transaction(() => {
       const changed = new Set<number>();
       const waiting = this.waitingChanges(accountId);
+      const unsaved = this.unsavedDrafts(accountId);
       for (const { remoteId, fields: reported } of messages) {
         // What the provider reports before it has the changes made here must not undo them. A
-        // message on its way to another folder is left alone.
+        // message on its way to another folder is left alone, and so is a draft the user wrote
+        // more in since the last version the provider has.
         const own = waiting.get(remoteId);
-        if (own?.move) continue;
+        if (own?.move || unsaved.has(remoteId)) continue;
         const read = own?.read?.value;
         const flagged = own?.flag?.value;
         const fields = {
@@ -1222,6 +1590,8 @@ export class MailStore {
         changed.add(folderId);
       }
       for (const remoteId of removedIds) {
+        // A draft gone there while the user writes here is made again with the next save.
+        if (unsaved.has(remoteId)) continue;
         if (remove.get(accountId, remoteId, folderId)) changed.add(folderId);
       }
       return [...changed];

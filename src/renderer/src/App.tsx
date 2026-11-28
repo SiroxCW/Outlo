@@ -10,10 +10,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Account,
+  CoreRequests,
   FolderRole,
   ListFilter,
   MessageFilter,
   MoveRole,
+  ResponseKind,
   SessionInfo,
   TitleBarStyle,
   WebModule,
@@ -202,6 +204,26 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
     roleOfMessage !== role &&
     accountFolders.some((entry) => entry.role === role);
 
+  // A new mail is written from the account of the folder, or the first one with mail.
+  const mailAccounts = mailboxes?.accounts.filter((entry) => entry.provider !== 'web') ?? [];
+  const writingAccountId = folder?.accountId ?? mailAccounts[0]?.id;
+  const canWrite = folders.some(
+    (entry) => entry.accountId === writingAccountId && entry.role === 'drafts',
+  );
+  // Starts a draft and opens it. An answer opens in the conversation of its message.
+  const startDraft = async (request: CoreRequests['drafts.create']['params']) => {
+    const id = await window.outlo.request('drafts.create', request).catch(() => null);
+    if (id !== null) setSelection({ id, child: false });
+  };
+  const respond = (kind: ResponseKind, messageId: number) => void startDraft({ kind, messageId });
+  const reading = {
+    showFrom: mailAccounts.length > 1,
+    onRespond: respond,
+    // After a draft was thrown away, the message it answered is shown again.
+    onDiscarded: (sourceId: number | null) =>
+      setSelection(sourceId === null ? undefined : { id: sourceId, child: false }),
+  };
+
   // An account in web mode is shown when the user picked it, or when there is no mail to show.
   const webAccounts = mailboxes?.accounts.filter((entry) => entry.provider === 'web') ?? [];
   // Right after an account was added, the list of accounts does not contain it yet. Showing
@@ -257,6 +279,14 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                 theme={themeChoice}
                 titleBar={titleBar}
                 onToggleFolders={() => setFoldersVisible((visible) => !visible)}
+                onNewMail={
+                  canWrite && writingAccountId !== undefined
+                    ? () => void startDraft({ kind: 'new', accountId: writingAccountId })
+                    : undefined
+                }
+                onRespond={
+                  message && !message.isDraft ? (kind) => respond(kind, message.id) : undefined
+                }
                 onSetRead={(isRead) =>
                   message &&
                   void window.outlo.request('messages.setRead', { ids: [message.id], isRead })
@@ -404,9 +434,10 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                           dark={dark}
                           listFolderId={searching ? undefined : folder?.id}
                           folderNames={folderNames}
+                          {...reading}
                         />
                       ) : (
-                        <ReadingPane open={{ ...opened, message }} dark={dark} />
+                        <ReadingPane open={{ ...opened, message }} dark={dark} {...reading} />
                       )}
                     </div>
                   </>

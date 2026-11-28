@@ -115,7 +115,8 @@ export class SyncEngine {
   // Sends the changes the user just made, instead of at the next check.
   sendChanges(): void {
     for (const [accountId, sync] of this.accounts) {
-      if (this.options.store.hasOperations(accountId)) sync.wake();
+      const { store } = this.options;
+      if (store.hasOperations(accountId) || store.hasDraftsToSend(accountId)) sync.wake();
     }
   }
 

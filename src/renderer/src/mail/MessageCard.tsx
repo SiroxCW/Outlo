@@ -23,7 +23,7 @@ import {
   SaveRegular,
 } from '@fluentui/react-icons';
 import { useMemo, useState } from 'react';
-import { MAX_IMAGE_URLS, type Attachment, type Message } from '@shared/api';
+import { MAX_IMAGE_URLS, type Attachment, type Message, type ResponseKind } from '@shared/api';
 import type { OpenMessage } from '../core/useMessage';
 import { t } from '../i18n';
 import { darkTheme, lightTheme } from '../theme';
@@ -89,7 +89,7 @@ const useStyles = makeStyles({
   loading: { padding: '24px', alignSelf: 'flex-start' },
 });
 
-interface MessageCardProps {
+export interface MessageCardProps {
   open: OpenMessage;
   message: Message;
   dark: boolean;
@@ -100,6 +100,7 @@ interface MessageCardProps {
   folderName?: string;
   // Clicking the header folds the message, in a conversation.
   onHeaderClick?(): void;
+  onRespond?(kind: ResponseKind): void;
 }
 
 type Notice = { kind: 'blocked' } | { kind: 'failed'; text: string };
@@ -112,6 +113,7 @@ export function MessageCard({
   size,
   folderName,
   onHeaderClick,
+  onRespond,
 }: MessageCardProps) {
   const styles = useStyles();
   // Pictures from the internet that the user asked for. They belong to this message only: the
@@ -191,25 +193,30 @@ export function MessageCard({
           )}
           {folderName && <div className={styles.folder}>{folderName}</div>}
         </div>
-        <div className={styles.side}>
+        {/* The buttons answer this message, not the conversation, so a click on them does not
+            fold it. */}
+        <div className={styles.side} onClick={(event) => event.stopPropagation()}>
           <div>
             <Button
               appearance="subtle"
               icon={<ArrowReplyRegular />}
               aria-label={t('ribbon.reply')}
-              disabled
+              disabled={!onRespond}
+              onClick={() => onRespond?.('reply')}
             />
             <Button
               appearance="subtle"
               icon={<ArrowReplyAllRegular />}
               aria-label={t('ribbon.replyAll')}
-              disabled
+              disabled={!onRespond}
+              onClick={() => onRespond?.('replyAll')}
             />
             <Button
               appearance="subtle"
               icon={<ArrowForwardRegular />}
               aria-label={t('ribbon.forward')}
-              disabled
+              disabled={!onRespond}
+              onClick={() => onRespond?.('forward')}
             />
           </div>
           <span className={styles.muted}>{formatFullDate(message.receivedAt)}</span>

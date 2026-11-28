@@ -55,6 +55,23 @@ export function idList(value: unknown, name: string, maxLength: number): number[
   return value.map((entry) => id(entry, name));
 }
 
+export function addressList(
+  value: unknown,
+  name: string,
+  maxLength: number,
+): { name: string; address: string }[] {
+  if (!Array.isArray(value) || value.length > maxLength) {
+    throw new Error(`${name} must be a list of at most ${maxLength} addresses`);
+  }
+  return value.map((entry, index) => {
+    const item = record(entry, `${name}[${index}]`);
+    return {
+      name: text(item.name, `${name}[${index}].name`, 320),
+      address: text(item.address, `${name}[${index}].address`, 320),
+    };
+  });
+}
+
 export function textList(
   value: unknown,
   name: string,

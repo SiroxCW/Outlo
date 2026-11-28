@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { endsAddress, isValidAddress, parseAddresses } from './addresses';
 import { createDateGroups } from './dateGroups';
 import { conversationTopic, formatListTime, formatSize } from './format';
 import { createListLayout, expandRow, type ListGroup } from './listLayout';
@@ -199,5 +200,26 @@ describe('conversationTopic', () => {
     expect(conversationTopic('Review: the plan')).toBe('Review: the plan');
     expect(conversationTopic('Reminder')).toBe('Reminder');
     expect(conversationTopic('')).toBe('');
+  });
+});
+
+describe('addresses as typed', () => {
+  it('reads names, angle brackets and lists', () => {
+    expect(
+      parseAddresses(' anna@x.example; "Berg, Ben" <ben@x.example>,\nCara <cara@x.example>;'),
+    ).toEqual([
+      { name: '', address: 'anna@x.example' },
+      { name: 'Berg, Ben', address: 'ben@x.example' },
+      { name: 'Cara', address: 'cara@x.example' },
+    ]);
+    expect(endsAddress('"Berg')).toBe(false);
+    expect(endsAddress('"Berg, Ben" <ben@x.example>')).toBe(true);
+  });
+
+  it('tells addresses from other text', () => {
+    expect(isValidAddress('anna@x.example')).toBe(true);
+    expect(isValidAddress('anna@localhost')).toBe(false);
+    expect(isValidAddress('Anna Berg')).toBe(false);
+    expect(isValidAddress('a b@x.example')).toBe(false);
   });
 });

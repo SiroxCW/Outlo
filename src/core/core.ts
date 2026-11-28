@@ -1,10 +1,14 @@
 import { writeFile } from 'node:fs/promises';
 import {
+  MAX_DRAFT_TEXT,
   MAX_IMAGE_URLS,
   MAX_PAGE_SIZE,
+  MAX_RECIPIENTS,
   MAX_TIME_BOUNDARIES,
   type CoreEvents,
   type CoreRequests,
+  type DraftContent,
+  type DraftKind,
   type HostRequests,
   type HostServices,
   type ListFilter,
@@ -29,6 +33,7 @@ const FILTERS: readonly MessageFilter[] = ['all', 'focused', 'other'];
 const LIST_FILTERS: readonly ListFilter[] = ['all', 'unread', 'flagged', 'toMe', 'hasFiles'];
 const SORT_FIELDS: readonly SortField[] = ['date', 'from', 'subject', 'importance', 'flag'];
 const MOVE_ROLES: readonly MoveRole[] = ['inbox', 'deleted', 'archive', 'junk'];
+const DRAFT_KINDS: readonly DraftKind[] = ['new', 'reply', 'replyAll', 'forward'];
 const MAX_IDS_PER_COMMAND = 10_000;
 const DEMO_SEEDED = 'demo.seeded';
 const UI_SETTINGS = 'ui.';
@@ -64,6 +69,17 @@ function listOptions(input: Record<string, unknown>): ListOptions {
   return options;
 }
 
+function draftContent(value: unknown): DraftContent {
+  const input = check.record(value, 'content');
+  return {
+    to: check.addressList(input.to, 'to', MAX_RECIPIENTS),
+    cc: check.addressList(input.cc, 'cc', MAX_RECIPIENTS),
+    bcc: check.addressList(input.bcc, 'bcc', MAX_RECIPIENTS),
+    subject: check.text(input.subject, 'subject', 2000),
+    text: check.text(input.text, 'text', MAX_DRAFT_TEXT),
+  };
+}
+
 // The core without any Electron code, so tests can run it under plain Node.
 export function createCore(options: CoreOptions) {
   const startedAt = Date.now();
@@ -80,6 +96,9 @@ export function createCore(options: CoreOptions) {
     web: accounts.filter((entry) => entry.provider === 'web').length,
     demo: accounts.filter((entry) => entry.provider === 'demo').length,
   });
+  const untouched = store.removeUntouchedDrafts();
+  if (untouched.length > 0)
+    log.info('Removed drafts nobody wrote in', { folders: untouched.length });
   // Until it is done, search finds texts stored before this start by their headers only.
   const textsIndexed = indexStoredTexts(store, () => closed).catch((error) =>
     log.error('Indexing the stored texts failed', {}, error),
@@ -206,6 +225,46 @@ export function createCore(options: CoreOptions) {
           check.idList(input.ids, 'ids', MAX_IDS_PER_COMMAND),
           check.oneOf(input.role, 'role', MOVE_ROLES),
         );
+        announce(folderIds, true);
+        engine?.sendChanges();
+        return undefined;
+      },
+
+      'drafts.create': (params) => {
+        const input = check.record(params, 'params');
+        const kind = check.oneOf(input.kind, 'kind', DRAFT_KINDS);
+        const created = store.createDraft(
+          kind === 'new'
+            ? { kind, accountId: check.id(input.accountId, 'accountId') }
+            : { kind, messageId: check.id(input.messageId, 'messageId') },
+        );
+        if (created) announce(created.folderIds, true);
+        return created?.id ?? null;
+      },
+
+      'drafts.get': (params) => store.getDraft(check.id(check.record(params, 'params').id, 'id')),
+
+      'drafts.save': (params) => {
+        const input = check.record(params, 'params');
+        const folderIds = store.saveDraft(check.id(input.id, 'id'), draftContent(input.content));
+        announce(folderIds, false);
+        if (folderIds.length > 0) engine?.sendChanges();
+        return undefined;
+      },
+
+      'drafts.close': (params) => {
+        const input = check.record(params, 'params');
+        const id = check.id(input.id, 'id');
+        const saved =
+          input.content === undefined ? [] : store.saveDraft(id, draftContent(input.content));
+        const removed = store.closeDraft(id);
+        announce([...new Set([...saved, ...removed])], removed.length > 0);
+        if (saved.length > 0) engine?.sendChanges();
+        return undefined;
+      },
+
+      'drafts.discard': (params) => {
+        const folderIds = store.discardDraft(check.id(check.record(params, 'params').id, 'id'));
         announce(folderIds, true);
         engine?.sendChanges();
         return undefined;

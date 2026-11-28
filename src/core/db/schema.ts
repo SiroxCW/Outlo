@@ -189,4 +189,25 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX operations_by_account ON operations(account_id, next_attempt_at);
   CREATE INDEX operations_by_remote_id ON operations(account_id, remote_id, kind);
   `,
+
+  // Drafts written here. The message holds what the list shows, this row what the editor needs:
+  // the text the user writes, and below it the earlier message of a reply or forward, which is
+  // kept as it came. version counts the saves here, saved_version is the one the provider has.
+  // source_remote_id names the message that is answered or forwarded, so the provider can make
+  // the draft part of its conversation. source_id is that message here, while it is stored.
+  `
+  CREATE TABLE drafts (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('new', 'reply', 'replyAll', 'forward')),
+    source_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    source_remote_id TEXT,
+    bcc_recipients TEXT NOT NULL DEFAULT '[]',
+    text TEXT NOT NULL DEFAULT '',
+    quote TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 0,
+    saved_version INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+  ) STRICT;
+  `,
 ];

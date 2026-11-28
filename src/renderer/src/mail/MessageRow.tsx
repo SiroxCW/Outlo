@@ -75,6 +75,7 @@ const useStyles = makeStyles({
   icons: { display: 'flex', gap: '4px', flexShrink: 0, fontSize: '14px' },
   flag: { color: tokens.colorPaletteRedForeground1 },
   important: { color: tokens.colorPaletteRedForeground1 },
+  draft: { color: tokens.colorPaletteRedForeground1 },
   placeholder: {
     height: '10px',
     borderRadius: '5px',
@@ -114,6 +115,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
   const unread = conversation ? conversation.unreadCount > 0 : !message.isRead;
   const flagged = conversation?.isFlagged ?? message.isFlagged;
   const files = conversation?.hasAttachments ?? message.hasAttachments;
+  const draft = conversation?.hasDraft ?? message.isDraft;
   const person = props.showRecipient
     ? formatAddresses(message.to)
     : conversation
@@ -144,6 +146,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
       )}
       <div className={styles.line}>
         <span className={mergeClasses(styles.sender, styles.ellipsis, unread && styles.unread)}>
+          {draft && <span className={styles.draft}>{t('list.draft')} </span>}
           {person || message.from.address}
         </span>
         <span className={styles.icons}>

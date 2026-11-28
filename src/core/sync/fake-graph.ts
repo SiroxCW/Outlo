@@ -45,6 +45,7 @@ export class FakeGraph {
   private readonly changes: Change[] = [];
   private readonly bodies = new Map<string, { contentType: string; content: string }>();
   private readonly attachments = new Map<string, (FakeAttachment & { id: string })[]>();
+  private readonly bcc = new Map<string, unknown>();
   private seq = 0;
   private oldestValidSeq = 0;
   private nextId = 1;
@@ -97,6 +98,11 @@ export class FakeGraph {
 
   setBody(messageId: string, contentType: 'html' | 'text', content: string): void {
     this.bodies.set(messageId, { contentType, content });
+  }
+
+  // The text of a message as the server has it.
+  body(messageId: string): { contentType: string; content: string } | undefined {
+    return this.bodies.get(messageId);
   }
 
   addAttachment(messageId: string, attachment: FakeAttachment): string {
@@ -181,6 +187,13 @@ export class FakeGraph {
       const size = Number(/odata\.maxpagesize=(\d+)/.exec(headers.Prefer)?.[1] ?? 10);
       return this.messageDelta(url, messages[1]!, size);
     }
+    if (path === '/me/messages' && method === 'POST') {
+      return this.createDraft(JSON.parse(init.body as string) as Record<string, unknown>);
+    }
+    const answer = /^\/me\/messages\/([^/]+)\/(createReply|createReplyAll|createForward)$/.exec(
+      path,
+    );
+    if (answer && method === 'POST') return this.createAnswer(answer[1]!, answer[2]!);
     const move = /^\/me\/messages\/([^/]+)\/move$/.exec(path);
     if (move && method === 'POST') {
       const { destinationId } = JSON.parse(init.body as string) as { destinationId?: string };
@@ -239,14 +252,71 @@ export class FakeGraph {
     return json(200, this.find(newId));
   }
 
+  private draftsFolder(): FakeFolder | undefined {
+    return [...this.folders.values()].find((folder) => folder.wellKnown === 'drafts');
+  }
+
+  // A new draft in the Drafts folder, as POST /me/messages makes it.
+  private createDraft(fields: Record<string, unknown>): Response {
+    const drafts = this.draftsFolder();
+    if (!drafts) return failure(404, 'ErrorItemNotFound', 'There is no Drafts folder');
+    const id = this.addMessage(drafts.id, {
+      subject: '',
+      bodyPreview: '',
+      from: { emailAddress: { name: 'Me', address: 'me@remote.example' } },
+      toRecipients: [],
+      isRead: true,
+    });
+    return this.patch(id, fields, 201);
+  }
+
+  // A draft that answers or forwards a message, in its conversation, with the message quoted.
+  private createAnswer(sourceId: string, kind: string): Response {
+    const source = this.find(sourceId);
+    const drafts = this.draftsFolder();
+    if (!source || !drafts) return failure(404, 'ErrorItemNotFound', 'The message does not exist');
+    const forward = kind === 'createForward';
+    const id = this.addMessage(drafts.id, {
+      conversationId: source.conversationId,
+      subject: `${forward ? 'FW' : 'RE'}: ${source.subject ?? ''}`,
+      bodyPreview: 'Quoted by the server',
+      from: { emailAddress: { name: 'Me', address: 'me@remote.example' } },
+      toRecipients: forward ? [] : [source.from ?? {}],
+      isRead: true,
+    });
+    this.setBody(id, 'html', '<p>Quoted by the server</p>');
+    return json(201, this.find(id));
+  }
+
   // Sets what the app may change about a message. Anything else is refused, as a mistake.
-  private patch(id: string, changes: Record<string, unknown>): Response {
+  private patch(id: string, changes: Record<string, unknown>, status = 200): Response {
     const folder = [...this.folders.values()].find((entry) => entry.messages.has(id));
     if (!folder) return failure(404, 'ErrorItemNotFound', 'The message does not exist');
-    const unknown = Object.keys(changes).filter((key) => key !== 'isRead' && key !== 'flag');
+    const allowed = ['isRead', 'flag', 'subject', 'body', 'toRecipients', 'ccRecipients'];
+    const unknown = Object.keys(changes).filter(
+      (key) => !allowed.includes(key) && key !== 'bccRecipients',
+    );
     if (unknown.length > 0) return failure(400, 'ErrorInvalidProperty', unknown.join(', '));
-    this.updateMessage(folder.id, id, changes as Partial<GraphMessage>);
-    return json(200, folder.messages.get(id));
+    const { body, bccRecipients, ...fields } = changes as Partial<GraphMessage> & {
+      body?: { contentType: string; content: string };
+      bccRecipients?: unknown;
+    };
+    if (bccRecipients) this.bcc.set(id, bccRecipients);
+    if (body) {
+      this.bodies.set(id, { contentType: body.contentType.toLowerCase(), content: body.content });
+      const text = body.content
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      (fields as Partial<GraphMessage>).bodyPreview = text.slice(0, 255);
+    }
+    this.updateMessage(folder.id, id, fields);
+    return json(status, folder.messages.get(id));
+  }
+
+  // Who a draft goes to in secret. Graph does not list it with the other fields.
+  bccOf(id: string): unknown {
+    return this.bcc.get(id);
   }
 
   private toFolder(folder: FakeFolder): GraphFolder {

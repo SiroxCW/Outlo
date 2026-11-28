@@ -3,6 +3,7 @@ import { createLog } from '@shared/log';
 import { GraphError, OfflineError, SignInNeededError, type GraphClient } from '../graph/client';
 import type { MailStore, SyncFolder } from '../mail/store';
 import { fetchBody } from './bodies';
+import { sendDrafts } from './drafts';
 import { fetchFolders, fetchRoles, toRemoteFolders } from './folders';
 import { syncMessagePage } from './messages';
 import { sendOperations } from './operations';
@@ -208,6 +209,12 @@ export class AccountSync {
       if (sent.error) throw sent.error;
       return 0;
     }
+    // Then the drafts, one version after the other while the user writes.
+    const saved = await sendDrafts(client, store, accountId, now);
+    if (saved) {
+      if (saved.error) throw saved.error;
+      return 0;
+    }
 
     if (this.foldersAt === undefined || now - this.foldersAt >= FOLDER_LIST_INTERVAL) {
       if (!this.roles || now - this.rolesAt >= ROLES_INTERVAL) {
@@ -250,6 +257,7 @@ export class AccountSync {
       const next = Math.min(
         this.foldersAt + FOLDER_LIST_INTERVAL,
         store.nextOperationAt(accountId) ?? Infinity,
+        store.nextDraftAt(accountId) ?? Infinity,
         ...nextCheck,
       );
       return Math.max(next - now, SECOND);

@@ -53,6 +53,8 @@ export interface MessageSummary {
   isFocused: boolean;
   hasAttachments: boolean;
   importance: Importance;
+  // A draft written here. It opens in the editor.
+  isDraft: boolean;
 }
 
 export interface Attachment {
@@ -83,6 +85,36 @@ export interface Message extends MessageSummary {
   attachments: Attachment[];
   inlineImages: InlineImage[];
 }
+
+export type DraftKind = 'new' | 'reply' | 'replyAll' | 'forward';
+export type ResponseKind = Exclude<DraftKind, 'new'>;
+
+// What the user edits in a draft.
+export interface DraftContent {
+  to: Address[];
+  cc: Address[];
+  bcc: Address[];
+  subject: string;
+  // The text the user writes, as HTML from the editor.
+  text: string;
+}
+
+export interface Draft extends DraftContent {
+  // The ID of its message.
+  id: number;
+  accountId: number;
+  kind: DraftKind;
+  from: Address;
+  // The earlier message below the text of a reply or forward, as HTML. It is not edited, and
+  // not safe to show before it was cleaned.
+  quote: string;
+  // The message that is answered or forwarded, while it is stored here. Its pictures belong to
+  // the quote.
+  sourceId: number | null;
+}
+
+export const MAX_RECIPIENTS = 500;
+export const MAX_DRAFT_TEXT = 2_000_000;
 
 // Which part of an inbox is shown: its Focused or its Other tab. Other folders use 'all'.
 export type MessageFilter = 'all' | 'focused' | 'other';
@@ -117,6 +149,8 @@ export interface ConversationSummary {
   hasAttachments: boolean;
   // Who wrote in the conversation, newest first, each once.
   senders: Address[];
+  // A draft written here belongs to it.
+  hasDraft: boolean;
 }
 
 export interface ListEntry extends MessageSummary {
@@ -198,6 +232,20 @@ export type CoreRequests = {
   // Moves messages to the folder with this role in their account: delete, archive, junk and
   // not junk. Messages already there stay.
   'messages.moveToRole': { params: { ids: number[]; role: MoveRole }; result: undefined };
+
+  // Starts a draft: a new message of an account, or an answer to or forward of a message.
+  // Returns the ID of the draft, or null when the account has no Drafts folder.
+  'drafts.create': {
+    params: { kind: 'new'; accountId: number } | { kind: ResponseKind; messageId: number };
+    result: number | null;
+  };
+  'drafts.get': { params: { id: number }; result: Draft | null };
+  // Stores what the user wrote. It goes to the provider in the background.
+  'drafts.save': { params: { id: number; content: DraftContent }; result: undefined };
+  // The editor closed, with what it had not saved yet. A draft nobody wrote in is removed.
+  'drafts.close': { params: { id: number; content?: DraftContent }; result: undefined };
+  // Throws a draft away: to Deleted Items, or for good when the provider never had it.
+  'drafts.discard': { params: { id: number }; result: undefined };
 
   'sync.status': { params: undefined; result: AccountSyncStatus[] };
   // Checks all accounts for news right away.

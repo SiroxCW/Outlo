@@ -38,7 +38,7 @@ import {
   WindowRegular,
 } from '@fluentui/react-icons';
 import { useMemo, useState, type ReactElement, type ReactNode } from 'react';
-import type { Folder, Message, TitleBarStyle } from '@shared/api';
+import type { Folder, Message, ResponseKind, TitleBarStyle } from '@shared/api';
 import { t } from '../i18n';
 import { THEME_CHOICES, THEME_LABELS, type ThemeChoice } from '../theme';
 
@@ -102,7 +102,10 @@ interface RibbonProps {
   onToggleFolders(): void;
   onSetRead(isRead: boolean): void;
   onSetFlagged(isFlagged: boolean): void;
+  // Undefined where no account can write mail.
+  onNewMail: (() => void) | undefined;
   // Undefined or false where the action does not apply to the open message.
+  onRespond: ((kind: ResponseKind) => void) | undefined;
   onDelete: (() => void) | undefined;
   onArchive: (() => void) | undefined;
   junk: { notJunk: boolean; onClick(): void } | false | undefined;
@@ -228,6 +231,7 @@ export function Ribbon(props: RibbonProps) {
   const [tab, setTab] = useState<'home' | 'view'>('home');
   const { message } = props;
   const withMessage = (action: () => void) => (message ? action : undefined);
+  const respond = props.onRespond;
 
   return (
     <div>
@@ -252,7 +256,11 @@ export function Ribbon(props: RibbonProps) {
       {tab === 'home' && (
         <div className={styles.ribbon}>
           <Group label={t('ribbon.new')}>
-            <Large label={t('ribbon.newMail')} icon={<ComposeRegular />} />
+            <Large
+              label={t('ribbon.newMail')}
+              icon={<ComposeRegular />}
+              onClick={props.onNewMail}
+            />
           </Group>
           <Group label={t('ribbon.delete')}>
             <Large label={t('ribbon.delete')} icon={<DeleteRegular />} onClick={props.onDelete} />
@@ -277,9 +285,21 @@ export function Ribbon(props: RibbonProps) {
           </Group>
           <Group label={t('ribbon.respond')}>
             <div className={styles.column}>
-              <Small label={t('ribbon.reply')} icon={<ArrowReplyRegular />} />
-              <Small label={t('ribbon.replyAll')} icon={<ArrowReplyAllRegular />} />
-              <Small label={t('ribbon.forward')} icon={<ArrowForwardRegular />} />
+              <Small
+                label={t('ribbon.reply')}
+                icon={<ArrowReplyRegular />}
+                onClick={respond && (() => respond('reply'))}
+              />
+              <Small
+                label={t('ribbon.replyAll')}
+                icon={<ArrowReplyAllRegular />}
+                onClick={respond && (() => respond('replyAll'))}
+              />
+              <Small
+                label={t('ribbon.forward')}
+                icon={<ArrowForwardRegular />}
+                onClick={respond && (() => respond('forward'))}
+              />
             </div>
           </Group>
           <Group label={t('ribbon.move')}>
