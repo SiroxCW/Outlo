@@ -1,6 +1,14 @@
 import { makeStyles, mergeClasses, tokens, Tooltip } from '@fluentui/react-components';
-import { CalendarRegular, MailFilled, PeopleRegular } from '@fluentui/react-icons';
+import {
+  CalendarFilled,
+  CalendarRegular,
+  MailFilled,
+  MailRegular,
+  PeopleFilled,
+  PeopleRegular,
+} from '@fluentui/react-icons';
 import type { ReactElement } from 'react';
+import type { WebModule } from '@shared/api';
 import { t } from '../i18n';
 import { barBackground } from '../theme';
 
@@ -49,6 +57,7 @@ function Module(props: {
   icon: ReactElement;
   selected?: boolean;
   disabled?: boolean;
+  onClick?: () => void;
 }) {
   const styles = useStyles();
   return (
@@ -58,6 +67,7 @@ function Module(props: {
         className={mergeClasses(styles.button, props.selected && styles.selected)}
         aria-pressed={props.selected === true}
         disabled={props.disabled}
+        onClick={props.onClick}
       >
         {props.icon}
       </button>
@@ -65,14 +75,41 @@ function Module(props: {
   );
 }
 
-// The strip on the left that switches between the modules. Calendar and People come later.
-export function AppBar({ dark }: { dark: boolean }) {
+interface AppBarProps {
+  dark: boolean;
+  // Set while an account in web mode is open. The bar then stands in for the one of Outlook on
+  // the web and switches between its modules.
+  web?: { module: WebModule; onOpen(module: WebModule): void };
+}
+
+// The strip on the left that switches between the modules. Calendar and People of the app
+// itself come later.
+export function AppBar({ dark, web }: AppBarProps) {
   const styles = useStyles();
+  const module = web?.module ?? 'mail';
+  const open = (target: WebModule) => (web ? () => web.onOpen(target) : undefined);
   return (
     <nav className={styles.root} style={{ backgroundColor: barBackground(dark) }}>
-      <Module label={t('module.mail')} icon={<MailFilled />} selected />
-      <Module label={t('module.calendar')} icon={<CalendarRegular />} disabled />
-      <Module label={t('module.people')} icon={<PeopleRegular />} disabled />
+      <Module
+        label={t('module.mail')}
+        icon={module === 'mail' ? <MailFilled /> : <MailRegular />}
+        selected={module === 'mail'}
+        onClick={open('mail')}
+      />
+      <Module
+        label={t('module.calendar')}
+        icon={module === 'calendar' ? <CalendarFilled /> : <CalendarRegular />}
+        selected={module === 'calendar'}
+        disabled={!web}
+        onClick={open('calendar')}
+      />
+      <Module
+        label={t('module.people')}
+        icon={module === 'people' ? <PeopleFilled /> : <PeopleRegular />}
+        selected={module === 'people'}
+        disabled={!web}
+        onClick={open('people')}
+      />
     </nav>
   );
 }

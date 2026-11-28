@@ -240,12 +240,23 @@ export interface ViewBounds {
   height: number;
 }
 
+// The parts of Outlook on the web that the app bar switches between.
+export type WebModule = 'mail' | 'calendar' | 'people';
+// Pages the app can open in Outlook on the web: a module, or its settings.
+export type WebPage = WebModule | 'settings';
+
 // Accounts in web mode. The main process shows Outlook on the web in a view of its own, on
-// top of the place the UI names. The UI never sees the page.
+// top of the place the UI names. The UI never sees the page, only a still picture of it while
+// a dialog of the app lies on top.
 export interface WebBridge {
   show(accountId: number, bounds: ViewBounds): void;
   hide(): void;
   reload(accountId: number): void;
+  open(accountId: number, page: WebPage): void;
+  // A picture of the page as a data URL, or null while there is none.
+  snapshot(accountId: number): Promise<string | null>;
+  // Called when an account in web mode moves to another module, also from inside the page.
+  onModule(listener: (accountId: number, module: WebModule) => void): () => void;
 }
 
 export interface SessionInfo {
@@ -262,6 +273,7 @@ export interface SessionBridge {
 }
 
 export type TitleBarStyle = 'custom' | 'native';
+export type ThemeChoice = 'system' | 'light' | 'dark';
 
 export interface TitleBarColors {
   background: string;
@@ -274,6 +286,9 @@ export interface WindowBridge {
   // Recreates the window, because a window cannot change its frame while it is open.
   setTitleBarStyle(style: TitleBarStyle): Promise<void>;
   setTitleBarColors(colors: TitleBarColors): void;
+  // Tells web pages whether the app is light or dark. Outlook on the web follows it when its
+  // own setting says so.
+  setTheme(theme: ThemeChoice): void;
 }
 
 // What the preload script exposes to the UI as window.outlo.
@@ -295,6 +310,7 @@ export const TITLE_BAR_HEIGHT = 48;
 export const WINDOW_GET_TITLE_BAR = 'window:get-title-bar';
 export const WINDOW_SET_TITLE_BAR = 'window:set-title-bar';
 export const WINDOW_SET_COLORS = 'window:set-colors';
+export const WINDOW_SET_THEME = 'window:set-theme';
 export const ACCOUNTS_ADD_MICROSOFT = 'accounts:add-microsoft';
 export const ACCOUNTS_ADD_WEB = 'accounts:add-web';
 export const ACCOUNTS_CANCEL_ADD = 'accounts:cancel-add';
@@ -304,6 +320,9 @@ export const ATTACHMENTS_SAVE = 'attachments:save';
 export const WEB_SHOW = 'web:show';
 export const WEB_HIDE = 'web:hide';
 export const WEB_RELOAD = 'web:reload';
+export const WEB_OPEN = 'web:open';
+export const WEB_SNAPSHOT = 'web:snapshot';
+export const WEB_MODULE = 'web:module';
 export const SESSION_GET_INFO = 'session:get-info';
 export const SESSION_SET_DEMO = 'session:set-demo';
 

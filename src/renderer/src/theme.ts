@@ -1,4 +1,5 @@
 import { webDarkTheme, webLightTheme, type Theme } from '@fluentui/react-components';
+import type { ThemeChoice } from '@shared/api';
 
 // Segoe UI where the user has it installed, the bundled Selawik everywhere else.
 const fontFamilyBase = "'Segoe UI', 'Selawik', system-ui, sans-serif";
@@ -11,5 +12,10 @@ export const darkTheme: Theme = { ...webDarkTheme, fontFamilyBase };
 export const barBackground = (dark: boolean): string =>
   dark ? darkTheme.colorNeutralBackground4 : lightTheme.colorNeutralBackground5;
 
-export type ThemeChoice = 'system' | 'light' | 'dark';
+export type { ThemeChoice };
 export const THEME_CHOICES: readonly ThemeChoice[] = ['system', 'light', 'dark'];
+export const THEME_LABELS = {
+  system: 'ribbon.themeSystem',
+  light: 'ribbon.themeLight',
+  dark: 'ribbon.themeDark',
+} as const;

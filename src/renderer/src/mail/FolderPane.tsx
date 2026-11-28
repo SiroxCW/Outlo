@@ -12,6 +12,7 @@ import {
 } from '@fluentui/react-components';
 import {
   ArchiveRegular,
+  ArrowClockwiseRegular,
   ChevronDownRegular,
   ChevronRightRegular,
   DeleteRegular,
@@ -180,6 +181,14 @@ export function FolderPane(props: FolderPaneProps) {
           </MenuTrigger>
           <MenuPopover>
             <MenuList>
+              {account.provider === 'web' && (
+                <MenuItem
+                  icon={<ArrowClockwiseRegular />}
+                  onClick={() => window.outlo.web.reload(account.id)}
+                >
+                  {t('web.reload')}
+                </MenuItem>
+              )}
               {account.provider === 'web' && props.onFullSignIn && (
                 <MenuItem icon={<PersonKeyRegular />} onClick={() => props.onFullSignIn?.(account)}>
                   {t('folders.fullSignIn')}

@@ -4,6 +4,8 @@ import {
   hostOf,
   isSignInHandOff,
   mayLoadInWebView,
+  moduleOf,
+  pageUrl,
   plainUserAgent,
   startUrl,
 } from './web-policy';
@@ -85,6 +87,48 @@ describe('startUrl', () => {
     for (const kind of ['work', 'personal'] as const) {
       expect(classifyWebUrl(startUrl('ann@x.example', kind))).toBe('outlook');
     }
+  });
+});
+
+describe('pageUrl', () => {
+  it('opens a module at the Outlook that fits the kind of account', () => {
+    expect(pageUrl('calendar', 'personal')).toBe('https://outlook.live.com/calendar/');
+    expect(pageUrl('people', 'work')).toBe('https://outlook.office.com/people/');
+  });
+
+  it('stays on the host the view already shows', () => {
+    const current = 'https://outlook.cloud.microsoft/mail/inbox/id/AAQ';
+    expect(pageUrl('calendar', 'work', current)).toBe('https://outlook.cloud.microsoft/calendar/');
+    expect(pageUrl('mail', 'work', 'https://login.microsoftonline.com/x')).toBe(
+      'https://outlook.office.com/mail/',
+    );
+    expect(pageUrl('mail', 'work', 'https://evil.example/mail/')).toBe(
+      'https://outlook.office.com/mail/',
+    );
+  });
+
+  it('only ever opens an address the view may load', () => {
+    for (const page of ['mail', 'calendar', 'people', 'settings'] as const) {
+      expect(classifyWebUrl(pageUrl(page, 'work'))).toBe('outlook');
+      expect(classifyWebUrl(pageUrl(page, 'personal'))).toBe('outlook');
+    }
+  });
+});
+
+describe('moduleOf', () => {
+  it.each([
+    ['https://outlook.live.com/mail/0/inbox', 'mail'],
+    ['https://outlook.office.com/mail/options/general', 'mail'],
+    ['https://outlook.office.com/owa/', 'mail'],
+    ['https://outlook.live.com/calendar/view/workweek', 'calendar'],
+    ['https://outlook.office.com/Calendar', 'calendar'],
+    ['https://outlook.cloud.microsoft/people/', 'people'],
+    ['https://outlook.office.com/calendarx/', 'mail'],
+  ])('%s belongs to %s', (url, module) => expect(moduleOf(url)).toBe(module));
+
+  it('knows no module outside Outlook', () => {
+    expect(moduleOf('https://login.live.com/calendar/')).toBeUndefined();
+    expect(moduleOf('not a url')).toBeUndefined();
   });
 });
 

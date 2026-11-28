@@ -11,14 +11,19 @@ import {
   SESSION_GET_INFO,
   SESSION_SET_DEMO,
   WEB_HIDE,
+  WEB_MODULE,
+  WEB_OPEN,
   WEB_RELOAD,
   WEB_SHOW,
+  WEB_SNAPSHOT,
   WINDOW_GET_TITLE_BAR,
   WINDOW_SET_COLORS,
+  WINDOW_SET_THEME,
   WINDOW_SET_TITLE_BAR,
   type CoreEvents,
   type CoreRequests,
   type OutloBridge,
+  type WebModule,
 } from '@shared/api';
 import { createClient } from '@shared/rpc';
 
@@ -49,6 +54,7 @@ const bridge: OutloBridge = {
     getTitleBarStyle: () => ipcRenderer.invoke(WINDOW_GET_TITLE_BAR),
     setTitleBarStyle: (style) => ipcRenderer.invoke(WINDOW_SET_TITLE_BAR, style),
     setTitleBarColors: (colors) => ipcRenderer.send(WINDOW_SET_COLORS, colors),
+    setTheme: (theme) => ipcRenderer.send(WINDOW_SET_THEME, theme),
   },
   accounts: {
     addMicrosoft: () => ipcRenderer.invoke(ACCOUNTS_ADD_MICROSOFT),
@@ -64,6 +70,14 @@ const bridge: OutloBridge = {
     show: (accountId, bounds) => ipcRenderer.send(WEB_SHOW, accountId, bounds),
     hide: () => ipcRenderer.send(WEB_HIDE),
     reload: (accountId) => ipcRenderer.send(WEB_RELOAD, accountId),
+    open: (accountId, page) => ipcRenderer.send(WEB_OPEN, accountId, page),
+    snapshot: (accountId) => ipcRenderer.invoke(WEB_SNAPSHOT, accountId),
+    onModule: (listener) => {
+      const handler = (_event: unknown, accountId: number, module: WebModule) =>
+        listener(accountId, module);
+      ipcRenderer.on(WEB_MODULE, handler);
+      return () => void ipcRenderer.removeListener(WEB_MODULE, handler);
+    },
   },
   session: {
     getInfo: () => ipcRenderer.invoke(SESSION_GET_INFO),

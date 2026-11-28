@@ -50,10 +50,13 @@ export const en = {
   'folders.webBadge': 'Web',
   'folders.webEntry': 'Outlook on the web',
 
-  'web.info':
-    'Web mode: this account shows Outlook on the web. Search, offline use and the other accounts of Outlo Mail do not include it.',
   'web.reload': 'Reload',
   'web.loading': 'Outlook on the web is loading',
+  'web.themeTip':
+    'Outlook on the web can follow the dark mode of Outlo Mail. In its settings, choose Appearance and then "Use system settings".',
+  'web.openSettings': 'Open its settings',
+
+  'settings.title': 'Settings',
 
   'welcome.title': 'Welcome to Outlo Mail',
   'welcome.text': 'Add your first account to get started. Your mail stays on this computer.',

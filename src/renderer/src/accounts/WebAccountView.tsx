@@ -1,53 +1,59 @@
-import { Button, makeStyles, tokens } from '@fluentui/react-components';
-import { ArrowClockwiseRegular, GlobeRegular } from '@fluentui/react-icons';
-import { useEffect, useRef } from 'react';
+import {
+  Button,
+  makeStyles,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
+  tokens,
+} from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
+import { useEffect, useRef, useState } from 'react';
 import type { Account } from '@shared/api';
 import { t } from '../i18n';
 
 const useStyles = makeStyles({
-  root: {
+  root: { flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '8px' },
+  card: {
     flexGrow: 1,
-    minWidth: 0,
+    minHeight: 0,
+    position: 'relative',
     display: 'flex',
-    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow2,
     overflow: 'hidden',
-  },
-  bar: {
-    flexShrink: 0,
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '4px 8px 4px 16px',
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
-  icon: { fontSize: '16px', flexShrink: 0 },
-  text: { flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  place: {
-    flexGrow: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: tokens.colorNeutralForeground3,
-  },
+  snapshot: { position: 'absolute', inset: 0, width: '100%', height: '100%' },
+  tip: { flexShrink: 0 },
 });
 
 interface WebAccountViewProps {
   account: Account;
-  // True while a dialog of the app is open. The web view lies on top of the page, so it has to
-  // step aside or it would cover the dialog.
+  // True while a dialog or menu of the app lies over the page. The web view is drawn on top of
+  // the whole UI, so it has to step aside or it would cover them.
   covered: boolean;
+  // A one-time hint how Outlook on the web follows the dark mode of the app.
+  themeTip: boolean;
+  onThemeTipDone(): void;
 }
 
 // Shown for an account in web mode. The page itself is not part of this UI: the main process
 // lays a separate, isolated view over the place this component keeps free and reports.
-export function WebAccountView({ account, covered }: WebAccountViewProps) {
+export function WebAccountView({
+  account,
+  covered,
+  themeTip,
+  onThemeTipDone,
+}: WebAccountViewProps) {
   const styles = useStyles();
   const place = useRef<HTMLDivElement>(null);
+  // While the page steps aside, a still picture of it keeps the place from going blank. It
+  // stays in place under the page afterwards, where nobody sees it, until the next one.
+  const [snapshot, setSnapshot] = useState<{ picture: string; number: number }>();
+  const taken = useRef(0);
 
   useEffect(() => {
     const element = place.current;
@@ -63,28 +69,68 @@ export function WebAccountView({ account, covered }: WebAccountViewProps) {
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', report);
-      window.outlo.web.hide();
     };
   }, [account.id, covered]);
 
+  // The picture is taken first and the page hidden once it is drawn. Without a picture, for
+  // example before anything has loaded, the page is hidden right away.
+  useEffect(() => {
+    if (!covered) return;
+    let current = true;
+    void window.outlo.web.snapshot(account.id).then((picture) => {
+      if (!current) return;
+      taken.current += 1;
+      setSnapshot(picture ? { picture, number: taken.current } : undefined);
+      if (!picture) window.outlo.web.hide();
+    });
+    return () => {
+      current = false;
+    };
+  }, [account.id, covered]);
+
+  useEffect(() => () => window.outlo.web.hide(), []);
+
   return (
     <section className={styles.root}>
-      <div className={styles.bar}>
-        <GlobeRegular className={styles.icon} />
-        <span className={styles.text} title={t('web.info')}>
-          {t('web.info')}
-        </span>
-        <Button
-          appearance="subtle"
-          size="small"
-          icon={<ArrowClockwiseRegular />}
-          onClick={() => window.outlo.web.reload(account.id)}
-        >
-          {t('web.reload')}
-        </Button>
-      </div>
-      <div ref={place} className={styles.place}>
+      {themeTip && (
+        <MessageBar className={styles.tip}>
+          <MessageBarBody>{t('web.themeTip')}</MessageBarBody>
+          <MessageBarActions
+            containerAction={
+              <Button
+                appearance="transparent"
+                size="small"
+                icon={<DismissRegular />}
+                aria-label={t('action.close')}
+                onClick={onThemeTipDone}
+              />
+            }
+          >
+            <Button
+              size="small"
+              onClick={() => {
+                window.outlo.web.open(account.id, 'settings');
+                onThemeTipDone();
+              }}
+            >
+              {t('web.openSettings')}
+            </Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+      <div ref={place} className={styles.card}>
         {t('web.loading')}
+        {snapshot && (
+          // A new element for each picture, so it reports being drawn even when the page has
+          // not changed and the picture is the same.
+          <img
+            key={snapshot.number}
+            className={styles.snapshot}
+            src={snapshot.picture}
+            alt=""
+            onLoad={() => covered && window.outlo.web.hide()}
+          />
+        )}
       </div>
     </section>
   );

@@ -6,6 +6,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeTheme,
   session,
   shell,
   WebContentsView,
@@ -15,11 +16,15 @@ import {
 import {
   ACCOUNTS_ADD_WEB,
   WEB_HIDE,
+  WEB_MODULE,
+  WEB_OPEN,
   WEB_RELOAD,
   WEB_SHOW,
+  WEB_SNAPSHOT,
   type AddAccountResult,
   type ViewBounds,
   type WebAccountKind,
+  type WebPage,
 } from '@shared/api';
 import { isSafeExternalUrl } from '@shared/links';
 import { isDemoSession, requestCore } from './core-process';
@@ -29,6 +34,9 @@ import {
   hostOf,
   isSignInHandOff,
   mayLoadInWebView,
+  moduleOf,
+  OUTLOOK_STYLE,
+  pageUrl,
   plainUserAgent,
   startUrl,
 } from './web-policy';
@@ -166,6 +174,16 @@ export function guardWebAccountContents(contents: WebContents): void {
   contents.on('will-attach-webview', (event) => event.preventDefault());
 }
 
+// Seen while a page loads. Matches the cards of the app in its light and dark look.
+const viewBackground = () => (nativeTheme.shouldUseDarkColors ? '#292929' : '#ffffff');
+
+// Tells the window which module the shown account is in, so its app bar can mark it.
+function reportModule(account: WebAccount, url: string): void {
+  const module = moduleOf(url);
+  if (!module || shown?.account !== account || shown.window.isDestroyed()) return;
+  shown.window.webContents.send(WEB_MODULE, account.accountId, module);
+}
+
 function createView(account: WebAccount): WebContentsView {
   const view = new WebContentsView({
     webPreferences: {
@@ -176,10 +194,26 @@ function createView(account: WebAccount): WebContentsView {
       webviewTag: false,
     },
   });
-  view.setBackgroundColor('#ffffff');
-  void view.webContents.loadURL(startUrl(account.email, account.kind));
+  // The same rounded corners as the cards of the app (borderRadiusLarge of Fluent).
+  view.setBorderRadius(6);
+  view.setBackgroundColor(viewBackground());
+  const contents = view.webContents;
+  // A style sheet lasts as long as the page, so each newly loaded Outlook gets it again.
+  contents.on('dom-ready', () => {
+    if (classifyWebUrl(contents.getURL()) === 'outlook') {
+      void contents.insertCSS(OUTLOOK_STYLE, { cssOrigin: 'user' });
+    }
+  });
+  contents.on('did-navigate', (_event, url) => reportModule(account, url));
+  contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+    if (isMainFrame) reportModule(account, url);
+  });
+  void contents.loadURL(startUrl(account.email, account.kind));
   return view;
 }
+
+const WEB_PAGES: readonly unknown[] = ['mail', 'calendar', 'people', 'settings'];
+const isWebPage = (value: unknown): value is WebPage => WEB_PAGES.includes(value);
 
 function hide(): void {
   if (!shown) return;
@@ -276,8 +310,10 @@ export function handleWebAccountRequests(): void {
       // The page is only loaded when the account is opened for the first time.
       account.view ??= createView(account);
       if (shown && (shown.account !== account || shown.window !== window)) hide();
-      if (!shown) window.contentView.addChildView(account.view);
+      const appearing = !shown;
+      if (appearing) window.contentView.addChildView(account.view);
       shown = { account, window };
+      if (appearing) reportModule(account, account.view.webContents.getURL());
       account.view.setBounds({
         x: Math.round(bounds.x),
         y: Math.round(bounds.y),
@@ -299,5 +335,29 @@ export function handleWebAccountRequests(): void {
     const contents = account.view.webContents;
     if (classifyWebUrl(contents.getURL()) === 'outlook') contents.reload();
     else void contents.loadURL(startUrl(account.email, account.kind));
+  });
+
+  // The app bar of the app stands in for the one of Outlook, which is hidden.
+  ipcMain.on(WEB_OPEN, (event, accountId: unknown, page: unknown) => {
+    if (!isTrustedSender(event) || typeof accountId !== 'number' || !isWebPage(page)) return;
+    const account = [...accounts.values()].find((entry) => entry.accountId === accountId);
+    const contents = account?.view?.webContents;
+    if (!account || !contents) return;
+    const current = contents.getURL();
+    // Like in Outlook, a click on the module that is open already changes nothing.
+    if (page !== 'settings' && moduleOf(current) === page) return;
+    void contents.loadURL(pageUrl(page, account.kind, current));
+  });
+
+  // While a dialog of the app lies on top, the UI shows this picture in place of the page.
+  ipcMain.handle(WEB_SNAPSHOT, async (event, accountId: unknown) => {
+    if (!isTrustedSender(event) || !shown || shown.account.accountId !== accountId) return null;
+    const image = await shown.account.view?.webContents.capturePage();
+    if (!image || image.isEmpty()) return null;
+    return `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}`;
+  });
+
+  nativeTheme.on('updated', () => {
+    for (const account of accounts.values()) account.view?.setBackgroundColor(viewBackground());
   });
 }

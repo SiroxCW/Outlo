@@ -1,4 +1,4 @@
-import type { WebAccountKind } from '@shared/api';
+import type { WebAccountKind, WebModule, WebPage } from '@shared/api';
 
 // Which addresses the view of a web account may load. Everything else leaves the app.
 
@@ -73,12 +73,46 @@ export function hostOf(address: string): string {
   }
 }
 
+const PATHS: Record<WebPage, string> = {
+  mail: '/mail/',
+  calendar: '/calendar/',
+  people: '/people/',
+  // The address of the appearance page itself opens an empty page, this one a filled one.
+  settings: '/mail/options/general',
+};
+
+// A page of Outlook on the web. A view that already shows Outlook stays on its host, because
+// Microsoft serves work accounts from several of them.
+export function pageUrl(page: WebPage, kind: WebAccountKind, current = ''): string {
+  const host =
+    classifyWebUrl(current) === 'outlook'
+      ? hostOf(current)
+      : kind === 'personal'
+        ? 'outlook.live.com'
+        : 'outlook.office.com';
+  return `https://${host}${PATHS[page]}`;
+}
+
 // Where the view of an account starts. The address is only a hint for the sign-in page.
 export function startUrl(email: string, kind: WebAccountKind): string {
-  const host = kind === 'personal' ? 'outlook.live.com' : 'outlook.office.com';
   const hint = /^[^\s@]+@[^\s@]+$/.test(email) ? `?login_hint=${encodeURIComponent(email)}` : '';
-  return `https://${host}/mail/${hint}`;
+  return pageUrl('mail', kind) + hint;
 }
+
+// The module an address of Outlook on the web belongs to. Settings count as mail.
+export function moduleOf(address: string): WebModule | undefined {
+  if (classifyWebUrl(address) !== 'outlook') return undefined;
+  const path = new URL(address).pathname.toLowerCase();
+  if (/^\/calendar(\/|$)/.test(path)) return 'calendar';
+  if (/^\/people(\/|$)/.test(path)) return 'people';
+  return 'mail';
+}
+
+// Outlook on the web brings its own app bar, launcher and logo. The app shows its own bar next
+// to the page, so these are hidden. Only the look changes: nothing is read from the page, and
+// when Microsoft renames these parts they simply show again.
+export const OUTLOOK_STYLE =
+  '#LeftRail, #owaAppLauncherBtn_container, #owaBranding_container { display: none !important; }';
 
 // Web apps look at the browser's name to decide what they offer. The view is the Chromium it
 // says it is, without the name of the app and of Electron added to it.

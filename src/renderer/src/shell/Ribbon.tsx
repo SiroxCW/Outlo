@@ -32,7 +32,7 @@ import {
 import { useState, type ReactElement, type ReactNode } from 'react';
 import type { Message, TitleBarStyle } from '@shared/api';
 import { t } from '../i18n';
-import { THEME_CHOICES, type ThemeChoice } from '../theme';
+import { THEME_CHOICES, THEME_LABELS, type ThemeChoice } from '../theme';
 
 const useStyles = makeStyles({
   tabs: {
@@ -148,12 +148,6 @@ function Small({ label, icon, onClick }: ActionProps) {
     </Button>
   );
 }
-
-const THEME_LABELS = {
-  system: 'ribbon.themeSystem',
-  light: 'ribbon.themeLight',
-  dark: 'ribbon.themeDark',
-} as const;
 
 export function Ribbon(props: RibbonProps) {
   const styles = useStyles();

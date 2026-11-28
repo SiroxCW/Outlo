@@ -8,7 +8,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useEffect, useRef, useState } from 'react';
-import type { Account, MessageFilter, SessionInfo, TitleBarStyle } from '@shared/api';
+import type { Account, MessageFilter, SessionInfo, TitleBarStyle, WebModule } from '@shared/api';
 import { AddAccountDialog } from './accounts/AddAccountDialog';
 import { RemoveAccountDialog } from './accounts/RemoveAccountDialog';
 import { WebAccountView } from './accounts/WebAccountView';
@@ -26,6 +26,7 @@ import { ReadingPane } from './mail/ReadingPane';
 import { SearchResults } from './mail/SearchResults';
 import { AppBar } from './shell/AppBar';
 import { Ribbon } from './shell/Ribbon';
+import { SettingsMenu } from './shell/SettingsMenu';
 import { Splitter } from './shell/Splitter';
 import { TitleBar } from './shell/TitleBar';
 import { barBackground, darkTheme, lightTheme, THEME_CHOICES, type ThemeChoice } from './theme';
@@ -65,6 +66,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   useEffect(() => {
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
   }, [dark]);
+  useEffect(() => window.outlo.window.setTheme(themeChoice), [themeChoice]);
 
   const [titleBar, setTitleBar] = useState<TitleBarStyle>('custom');
   useEffect(() => {
@@ -87,6 +89,16 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   // False: closed. True: add an account. An account: sign it in fully, to replace its web mode.
   const [addingAccount, setAddingAccount] = useState<boolean | Account>(false);
   const [chosenWebAccountId, setChosenWebAccountId] = useState<number>();
+  // Which module each account in web mode shows, as reported by the main process.
+  const [webModules, setWebModules] = useState<Record<number, WebModule>>({});
+  useEffect(
+    () =>
+      window.outlo.web.onModule((accountId, module) =>
+        setWebModules((current) => ({ ...current, [accountId]: module })),
+      ),
+    [],
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [removing, setRemoving] = useState<Account>();
   const setDemo = (demo: boolean) => void window.outlo.session.setDemo(demo);
   const [folderWidth, setFolderWidth] = useState(() => Number(settings.get('folderWidth', '240')));
@@ -136,30 +148,52 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
         <TitleBar
           customFrame={titleBar === 'custom'}
           dark={dark}
+          showSearch={!webAccount}
           search={search}
           onSearch={setSearch}
-        />
+        >
+          <SettingsMenu
+            theme={themeChoice}
+            onTheme={(choice) => settings.set('theme', choice)}
+            titleBar={titleBar}
+            onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
+            demo={session.demo}
+            onDemo={setDemo}
+            onOpenChange={setSettingsOpen}
+          />
+        </TitleBar>
         <div className={styles.body}>
-          <AppBar dark={dark} />
+          <AppBar
+            dark={dark}
+            web={
+              webAccount && {
+                module: webModules[webAccount.id] ?? 'mail',
+                onOpen: (module) => window.outlo.web.open(webAccount.id, module),
+              }
+            }
+          />
           <div className={styles.main}>
-            <Ribbon
-              message={editable ? message : null}
-              theme={themeChoice}
-              titleBar={titleBar}
-              onToggleFolders={() => setFoldersVisible((visible) => !visible)}
-              onSetRead={(isRead) =>
-                message &&
-                void window.outlo.request('messages.setRead', { ids: [message.id], isRead })
-              }
-              onSetFlagged={(isFlagged) =>
-                message &&
-                void window.outlo.request('messages.setFlagged', { ids: [message.id], isFlagged })
-              }
-              onTheme={(choice) => settings.set('theme', choice)}
-              onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
-              demo={session.demo}
-              onDemo={setDemo}
-            />
+            {/* Outlook on the web brings its own ribbon, and this one would do nothing for it. */}
+            {!webAccount && (
+              <Ribbon
+                message={editable ? message : null}
+                theme={themeChoice}
+                titleBar={titleBar}
+                onToggleFolders={() => setFoldersVisible((visible) => !visible)}
+                onSetRead={(isRead) =>
+                  message &&
+                  void window.outlo.request('messages.setRead', { ids: [message.id], isRead })
+                }
+                onSetFlagged={(isFlagged) =>
+                  message &&
+                  void window.outlo.request('messages.setFlagged', { ids: [message.id], isFlagged })
+                }
+                onTheme={(choice) => settings.set('theme', choice)}
+                onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
+                demo={session.demo}
+                onDemo={setDemo}
+              />
+            )}
             {session.demo && (
               <MessageBar className={styles.banner}>
                 <MessageBarBody>{t('demo.banner')}</MessageBarBody>
@@ -176,7 +210,9 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
               </div>
             ) : (
               <div className={styles.content}>
-                {foldersVisible && mailboxes && (
+                {/* Without the ribbon there is no button to bring the pane back, and it is the
+                    only way to leave a web account. So it stays while one is open. */}
+                {(foldersVisible || webAccount) && mailboxes && (
                   <>
                     <div className={styles.pane} style={{ width: folderWidth }}>
                       <FolderPane
@@ -211,7 +247,15 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                 {webAccount ? (
                   <WebAccountView
                     account={webAccount}
-                    covered={addingAccount !== false || removing !== undefined}
+                    covered={addingAccount !== false || removing !== undefined || settingsOpen}
+                    // Only once Outlook is open, and only where the app is dark: a light app
+                    // matches the light Outlook that Microsoft starts with.
+                    themeTip={
+                      dark &&
+                      webModules[webAccount.id] !== undefined &&
+                      settings.get(`webThemeTip.${webAccount.id}`, '') !== 'done'
+                    }
+                    onThemeTipDone={() => settings.set(`webThemeTip.${webAccount.id}`, 'done')}
                   />
                 ) : (
                   <>

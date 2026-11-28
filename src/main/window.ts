@@ -4,6 +4,7 @@ import {
   TITLE_BAR_HEIGHT,
   WINDOW_GET_TITLE_BAR,
   WINDOW_SET_COLORS,
+  WINDOW_SET_THEME,
   WINDOW_SET_TITLE_BAR,
   type TitleBarColors,
   type TitleBarStyle,
@@ -73,6 +74,14 @@ export function handleWindowRequests(): void {
       replacement.setBounds(old.getBounds());
       old.destroy();
     }
+  });
+
+  // Web pages, Outlook on the web among them, learn from this whether to be light or dark.
+  ipcMain.on(WINDOW_SET_THEME, (event, theme: unknown) => {
+    if (!isTrustedSender(event) || (theme !== 'system' && theme !== 'light' && theme !== 'dark')) {
+      return;
+    }
+    nativeTheme.themeSource = theme;
   });
 
   ipcMain.on(WINDOW_SET_COLORS, (event, colors: TitleBarColors) => {
