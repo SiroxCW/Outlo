@@ -1,3 +1,6 @@
+import { createLog, redactUrl } from '@shared/log';
+
+const log = createLog('graph');
 const GRAPH_ORIGIN = 'https://graph.microsoft.com';
 const GRAPH = `${GRAPH_ORIGIN}/v1.0`;
 const MAX_ATTEMPTS = 5;
@@ -102,8 +105,11 @@ export class GraphClient {
     if (request.maxPageSize) prefer.push(`odata.maxpagesize=${request.maxPageSize}`);
     let refreshed = false;
 
+    // Paths without IDs and without the query, which holds the place of a sync.
+    const logPath = redactUrl(url).slice(GRAPH_ORIGIN.length);
     for (let attempt = 0; ; attempt++) {
       const token = await this.options.getToken(false);
+      const started = performance.now();
       let response: Response;
       try {
         response = await this.options.fetch(url, {
@@ -120,17 +126,31 @@ export class GraphClient {
         throw new OfflineError(error instanceof Error ? error.message : String(error));
       }
 
+      log.debug('Request', {
+        method: request.method ?? 'GET',
+        path: logPath,
+        status: response.status,
+        ms: Math.round(performance.now() - started),
+      });
       if (response.ok) return response;
 
       // The token may have been revoked before its time. Try once with a new one.
       if (response.status === 401 && !refreshed) {
+        log.info('Renewing the access token after status 401', { path: logPath });
         refreshed = true;
         await this.options.getToken(true);
         continue;
       }
       const temporary = [429, 503, 504].includes(response.status);
       if (temporary && attempt < MAX_ATTEMPTS - 1) {
-        await this.sleep(retryAfter(response, attempt));
+        const wait = retryAfter(response, attempt);
+        log.warn('Microsoft Graph asked to wait', {
+          status: response.status,
+          attempt: attempt + 1,
+          waitMs: wait,
+          path: logPath,
+        });
+        await this.sleep(wait);
         continue;
       }
       throw await toError(response);

@@ -4,6 +4,7 @@ import {
   MenuDivider,
   MenuGroup,
   MenuGroupHeader,
+  MenuItem,
   MenuItemCheckbox,
   MenuItemRadio,
   MenuList,
@@ -14,6 +15,7 @@ import {
 import {
   BeakerRegular,
   ChatMultipleRegular,
+  DocumentTextRegular,
   SettingsRegular,
   WindowRegular,
 } from '@fluentui/react-icons';
@@ -81,6 +83,11 @@ export function SettingsMenu(props: SettingsMenuProps) {
           <MenuItemCheckbox name="session" value="demo" icon={<BeakerRegular />}>
             {t('ribbon.demo')}
           </MenuItemCheckbox>
+          <MenuDivider />
+          {/* For bug reports. The log holds no addresses, names or texts of mail. */}
+          <MenuItem icon={<DocumentTextRegular />} onClick={() => window.outlo.logs.openFolder()}>
+            {t('settings.openLogs')}
+          </MenuItem>
         </MenuList>
       </MenuPopover>
     </Menu>

@@ -322,6 +322,11 @@ export interface SessionInfo {
   secureStorage: boolean;
 }
 
+// The log files of the app, for bug reports.
+export interface LogsBridge {
+  openFolder(): void;
+}
+
 export interface SessionBridge {
   getInfo(): Promise<SessionInfo>;
   // Switches between the demo and the real data. The window reloads.
@@ -356,6 +361,7 @@ export interface OutloBridge {
   attachments: AttachmentsBridge;
   web: WebBridge;
   session: SessionBridge;
+  logs: LogsBridge;
 }
 
 export const MAX_PAGE_SIZE = 500;
@@ -382,6 +388,7 @@ export const WEB_SNAPSHOT = 'web:snapshot';
 export const WEB_MODULE = 'web:module';
 export const SESSION_GET_INFO = 'session:get-info';
 export const SESSION_SET_DEMO = 'session:set-demo';
+export const LOGS_OPEN_FOLDER = 'logs:open-folder';
 
 export const CORE_PORT_REQUEST = 'core-port-request';
 export const CORE_PORT = 'core-port';

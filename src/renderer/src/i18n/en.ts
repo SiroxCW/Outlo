@@ -58,6 +58,7 @@ export const en = {
     'Outlook on the web can follow the dark mode of Outlo Mail. In its settings, choose Appearance and then "Use system settings".',
   'web.openSettings': 'Open its settings',
 
+  'settings.openLogs': 'Open log folder',
   'settings.title': 'Settings',
 
   'welcome.title': 'Welcome to Outlo Mail',

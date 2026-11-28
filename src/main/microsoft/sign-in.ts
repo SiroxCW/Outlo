@@ -6,12 +6,14 @@ import {
 } from '@azure/msal-node';
 import { app, safeStorage, shell } from 'electron';
 import type { AddAccountResult, TokenResult } from '@shared/api';
+import { createLog } from '@shared/log';
 import { requestCore } from '../core-process';
 import { ADMIN_CONSENT_URL, AUTHORITY, CLIENT_ID, SCOPES } from './config';
 import { classifyRedirectError, listenForRedirect, SignInAborted, type Loopback } from './loopback';
 import { createCachePlugin } from './token-cache';
 
 const SIGN_IN_TIMEOUT = 10 * 60 * 1000;
+const log = createLog('sign-in');
 
 let client: PublicClientApplication | undefined;
 let running: Loopback | undefined;
@@ -36,6 +38,19 @@ export async function hasSecureStorage(): Promise<boolean> {
 }
 
 export async function addMicrosoftAccount(): Promise<AddAccountResult> {
+  const result = await signIn();
+  // The code of a refusal, like AADSTS90094, tells why without telling who.
+  const code = result.status === 'failed' ? /AADSTS\d+/.exec(result.message)?.[0] : undefined;
+  const report = result.status === 'failed' ? log.warn : log.info;
+  report('Microsoft sign-in ended', {
+    status: result.status,
+    code,
+    ...(result.status === 'added' && { accountId: result.accountId }),
+  });
+  return result;
+}
+
+async function signIn(): Promise<AddAccountResult> {
   if (running) return { status: 'failed', message: 'Another sign-in is still open' };
   try {
     const msal = getClient();
@@ -82,6 +97,7 @@ export async function addMicrosoftAccount(): Promise<AddAccountResult> {
     if (error instanceof SignInAborted && error.reason === 'cancelled') {
       return { status: 'cancelled' };
     }
+    log.warn('The Microsoft sign-in failed', {}, error);
     return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
   } finally {
     running = undefined;
@@ -100,7 +116,10 @@ export async function getMicrosoftToken(
   try {
     const msal = getClient();
     const account = await msal.getTokenCache().getAccountByHomeId(homeAccountId);
-    if (!account) return { status: 'signInNeeded' };
+    if (!account) {
+      log.warn('The sign-in of an account is not stored any more');
+      return { status: 'signInNeeded' };
+    }
     const result = await msal.acquireTokenSilent({ account, scopes: SCOPES, forceRefresh });
     return {
       status: 'ok',
@@ -108,9 +127,13 @@ export async function getMicrosoftToken(
       expiresAt: result.expiresOn?.getTime() ?? Date.now(),
     };
   } catch (error) {
-    if (error instanceof InteractionRequiredAuthError) return { status: 'signInNeeded' };
+    if (error instanceof InteractionRequiredAuthError) {
+      log.warn('Microsoft asks to sign in again', {}, error);
+      return { status: 'signInNeeded' };
+    }
     const code = (error as { errorCode?: string }).errorCode ?? '';
     if (/network|endpoints_resolution|timeout/.test(code)) return { status: 'offline' };
+    log.error('Getting an access token failed', {}, error);
     return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
   }
 }

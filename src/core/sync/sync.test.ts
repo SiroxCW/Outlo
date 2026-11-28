@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Folder } from '@shared/api';
+import { LOG_LINE, setUpLog } from '@shared/log';
 import { openDatabase } from '../db/database';
 import { GraphClient } from '../graph/client';
 import { MailStore } from '../mail/store';
@@ -538,5 +539,90 @@ describe('message texts', () => {
     now += 31_000;
     await settle(sync);
     expect(store.getMessage(store.search('Draft', 1)[0]!.id)!.body?.content).toBe('Second version');
+  });
+});
+
+describe('log', () => {
+  it('tells what the sync did and what went wrong, without anything personal', async () => {
+    const lines: string[] = [];
+    setUpLog({
+      process: 'core',
+      level: 'debug',
+      home: '/home/tester',
+      write: (line) => lines.push(line),
+    });
+    try {
+      // Real IDs of Microsoft are long. They point to a mailbox and must not appear either.
+      const remoteId = (index: number) => `AAMkAGI2TG93AAAuAAAAAAAiQ8W967B7TKBjgx9rVEURAQ${index}`;
+      const person = { name: 'Petra Lang', address: 'petra.lang@private.example' };
+      const recent = new Date(now - 86_400_000).toISOString();
+      const taxes = graph.addFolder('Tax papers 2026');
+      const letter = graph.addMessage(taxes, {
+        id: remoteId(1),
+        subject: 'Salary talk',
+        bodyPreview: 'Please keep this between us',
+        from: { emailAddress: person },
+        receivedDateTime: recent,
+        hasAttachments: true,
+      });
+      graph.setBody(letter, 'text', 'Please keep this between us');
+      graph.addAttachment(letter, {
+        name: 'Medical letter.pdf',
+        contentType: 'application/pdf',
+        content: new Uint8Array([1]),
+      });
+      graph.addMessage(inbox, {
+        id: remoteId(2),
+        subject: 'Salary talk',
+        from: { emailAddress: person },
+      });
+      token = async () => 'eyJhbGciOiJSUzI1NiJ9.c2VjcmV0LXRva2Vu.c2lnbmF0dXJl';
+
+      // Once the server asks to wait. Later it refuses, naming the folder and the person.
+      let requests = 0;
+      graph.intercept = () =>
+        ++requests === 3
+          ? new Response('{}', { status: 429, headers: { 'Retry-After': '1' } })
+          : undefined;
+      const sync = createSync();
+      await settle(sync);
+      graph.intercept = () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'ErrorAccessDenied',
+              message: `Access to 'Tax papers 2026' of ${person.address} (${person.name}) is denied`,
+            },
+          }),
+          { status: 403 },
+        );
+      now += 6 * MINUTE;
+      await sync.stepSafely();
+      expect(sync.status().state).toBe('error');
+
+      const text = lines.join('\n');
+      expect(text).toContain('Microsoft Graph asked to wait');
+      expect(text).toContain('Read a page of a folder');
+      expect(text).toMatch(
+        /The sync stopped account=\d+ state=error before=idle .*code=ErrorAccessDenied/,
+      );
+      for (const line of text.split('\n'))
+        expect(line).toMatch(new RegExp(`${LOG_LINE.source}|^ {4}at `));
+      const secrets = [
+        'Petra',
+        'petra.lang',
+        'private.example',
+        'Tax papers',
+        'Salary',
+        'Medical',
+        'between us',
+        'AAMkAGI2TG93',
+        'c2VjcmV0',
+        '/home/',
+      ];
+      for (const secret of secrets) expect(text).not.toContain(secret);
+    } finally {
+      setUpLog(undefined);
+    }
   });
 });

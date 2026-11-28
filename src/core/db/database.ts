@@ -1,5 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
+import { createLog } from '@shared/log';
 import { MIGRATIONS } from './schema';
+
+const log = createLog('database');
 
 export type Database = DatabaseSync;
 
@@ -26,9 +29,15 @@ export function migrate(db: Database, migrations: string[] = MIGRATIONS): void {
   }
 
   for (let version = current; version < migrations.length; version++) {
+    const started = performance.now();
     transaction(db, () => {
       db.exec(migrations[version]!);
       db.exec(`PRAGMA user_version = ${version + 1}`);
+    });
+    log.info('Updated the database', {
+      from: version,
+      to: version + 1,
+      ms: Math.round(performance.now() - started),
     });
   }
 }

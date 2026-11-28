@@ -8,6 +8,7 @@ import {
   ATTACHMENTS_OPEN,
   ATTACHMENTS_SAVE,
   CORE_PORT_REQUEST,
+  LOGS_OPEN_FOLDER,
   SESSION_GET_INFO,
   SESSION_SET_DEMO,
   WEB_HIDE,
@@ -82,6 +83,9 @@ const bridge: OutloBridge = {
   session: {
     getInfo: () => ipcRenderer.invoke(SESSION_GET_INFO),
     setDemo: (demo) => ipcRenderer.invoke(SESSION_SET_DEMO, demo),
+  },
+  logs: {
+    openFolder: () => ipcRenderer.send(LOGS_OPEN_FOLDER),
   },
 };
 contextBridge.exposeInMainWorld('outlo', bridge);

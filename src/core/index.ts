@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { createLog, setUpLog } from '@shared/log';
 import type { Endpoint } from '@shared/rpc';
 import { createCore } from './core';
 import { electronFetch, loadImage } from './electron-net';
@@ -6,9 +8,19 @@ import { electronFetch, loadImage } from './electron-net';
 const databasePath = process.env.OUTLO_DATABASE;
 if (!databasePath) throw new Error('OUTLO_DATABASE is not set');
 
+// Log lines go to the output, which the main process writes to the log file.
+process.stdout.on('error', () => undefined);
+setUpLog({
+  process: 'core',
+  level: process.env.OUTLO_LOG_LEVEL === 'debug' ? 'debug' : 'info',
+  home: homedir(),
+  write: (line) => process.stdout.write(`${line}\n`),
+});
+const log = createLog('core');
+
 const core = createCore({ databasePath, fetch: electronFetch, loadImage });
 if (process.env.OUTLO_DEMO === '1') {
-  core.seedDemoData().catch((error) => console.error('Creating the demo data failed', error));
+  core.seedDemoData().catch((error) => log.error('Creating the demo data failed', {}, error));
 }
 
 // The main process sends two ports for itself and one for every UI window that connects.

@@ -3,16 +3,20 @@ import { join } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { ATTACHMENTS_OPEN, ATTACHMENTS_SAVE, type AttachmentResult } from '@shared/api';
 import { isRunnableFile, safeFileName } from '@shared/files';
+import { createLog } from '@shared/log';
 import { requestCore } from './core-process';
 import { isTrustedSender } from './renderer-site';
 
 // Attachments the user opens are written here first. The folder is emptied on every start.
 const openedDirectory = () => join(app.getPath('userData'), 'opened');
 
-const failed = (error: unknown): AttachmentResult => ({
-  status: 'failed',
-  message: error instanceof Error ? error.message : String(error),
-});
+const log = createLog('attachments');
+
+// The name of the file never goes into the log, only what went wrong.
+const failed = (error: unknown): AttachmentResult => {
+  log.warn('An attachment could not be opened or saved', {}, error);
+  return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
+};
 
 export function handleAttachmentRequests(): void {
   rmSync(openedDirectory(), { recursive: true, force: true });

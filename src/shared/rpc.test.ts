@@ -39,6 +39,26 @@ describe('requests', () => {
     await expect(client.request('fail', undefined)).rejects.toThrow('broken');
   });
 
+  it('reports a failing request by its method', async () => {
+    const failures: string[] = [];
+    const server = createServer<TestRequests, TestEvents>(
+      {
+        add: ({ a, b }) => a + b,
+        fail: () => {
+          throw new Error('broken');
+        },
+        slow: (value) => value,
+      },
+      { onError: (method, error) => failures.push(`${method}: ${(error as Error).message}`) },
+    );
+    const [uiSide, coreSide] = createEndpointPair();
+    server.connect(coreSide);
+    const client = createClient<TestRequests>(uiSide);
+    await client.request('add', { a: 1, b: 1 });
+    await expect(client.request('fail', undefined)).rejects.toThrow('broken');
+    expect(failures).toEqual(['fail: broken']);
+  });
+
   it('matches answers to requests when they arrive out of order', async () => {
     const { client } = setup();
     const results = await Promise.all([

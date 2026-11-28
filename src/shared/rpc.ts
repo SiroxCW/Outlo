@@ -46,8 +46,14 @@ function isEvent(message: unknown): message is EventMessage {
   return isRecord(message) && typeof message.event === 'string';
 }
 
+export interface ServerOptions {
+  // Called with every request that failed, before the error is sent back.
+  onError?(method: string, error: unknown): void;
+}
+
 export function createServer<Requests extends RequestMap, Events extends EventMap>(
   handlers: Handlers<Requests>,
+  options: ServerOptions = {},
 ) {
   const endpoints = new Set<Endpoint>();
 
@@ -57,6 +63,7 @@ export function createServer<Requests extends RequestMap, Events extends EventMa
       const result = await handlers[method]!(params);
       endpoint.post({ id, result } satisfies ResponseMessage);
     } catch (error) {
+      options.onError?.(method, error);
       const text = error instanceof Error ? error.message : String(error);
       endpoint.post({ id, error: text } satisfies ResponseMessage);
     }

@@ -1,10 +1,12 @@
 import type { AccountSyncStatus, FolderRole, SyncState } from '@shared/api';
+import { createLog } from '@shared/log';
 import { GraphError, OfflineError, SignInNeededError, type GraphClient } from '../graph/client';
 import type { MailStore, SyncFolder } from '../mail/store';
 import { fetchBody } from './bodies';
 import { fetchFolders, fetchRoles, toRemoteFolders } from './folders';
 import { syncMessagePage } from './messages';
 
+const log = createLog('sync');
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const OFTEN_INTERVAL = 30 * SECOND;
@@ -113,6 +115,7 @@ export class AccountSync {
     } catch (error) {
       // One message that cannot be fetched must not hold up the others.
       if (!(error instanceof GraphError)) throw error;
+      log.warn('Skipped a text that could not be fetched', { messageId: next.id }, error);
       this.bodiesSkipped.add(next.id);
     }
     return true;
@@ -135,8 +138,13 @@ export class AccountSync {
     });
   }
 
-  private setState(state: SyncState, message: string | null = null): void {
+  private setState(state: SyncState, message: string | null = null, error?: unknown): void {
     if (state === this.state && message === this.message) return;
+    const fields = { account: this.options.accountId, state, before: this.state };
+    const working = (entry: SyncState) => entry === 'syncing' || entry === 'idle';
+    if (!working(state)) log.warn('The sync stopped', fields, error);
+    else if (!working(this.state)) log.info('The sync works again', fields);
+    else log.debug('Sync state', fields);
     this.state = state;
     this.message = message;
     this.options.events.statusChanged();
@@ -152,21 +160,21 @@ export class AccountSync {
       this.failures++;
       const backoff = Math.min(15 * SECOND * 2 ** (this.failures - 1), 10 * MINUTE);
       if (error instanceof SignInNeededError) {
-        this.setState('signInNeeded');
+        this.setState('signInNeeded', null, error);
         return 60 * MINUTE;
       }
       if (
         error instanceof GraphError &&
         /MailboxNot(Enabled|Supported)ForRESTAPI/.test(error.code)
       ) {
-        this.setState('noMailbox');
+        this.setState('noMailbox', null, error);
         return 60 * MINUTE;
       }
       if (error instanceof OfflineError) {
-        this.setState('offline');
+        this.setState('offline', null, error);
         return Math.min(backoff, MINUTE);
       }
-      this.setState('error', error instanceof Error ? error.message : String(error));
+      this.setState('error', error instanceof Error ? error.message : String(error), error);
       return backoff;
     }
   }
@@ -183,7 +191,13 @@ export class AccountSync {
         this.rolesAt = now;
       }
       const folders = toRemoteFolders(await fetchFolders(client, this.hiddenChildren), this.roles);
-      if (store.saveRemoteFolders(accountId, folders)) events.foldersChanged();
+      const changed = store.saveRemoteFolders(accountId, folders);
+      if (changed) events.foldersChanged();
+      log.debug('Fetched the folder list', {
+        account: accountId,
+        folders: folders.length,
+        changed,
+      });
       this.foldersAt = now;
       return 0;
     }
@@ -215,18 +229,29 @@ export class AccountSync {
 
     if (folder.syncPending !== 0) this.setState('syncing');
     const fromStart = folder.syncLink === null || folder.syncPending === 1;
+    // Folders are named by their role, never by the name the user gave them.
+    const fields = { account: accountId, folderId: folder.id, role: folder.role ?? 'custom' };
+    const started = performance.now();
     let result;
     try {
       result = await syncMessagePage(client, store, accountId, folder);
     } catch (error) {
       // The folder is gone at the provider. The next folder list removes it here too.
       if (error instanceof GraphError && error.status === 404) {
+        log.info('A folder is gone at the provider', fields);
         this.checkedAt.set(folder.id, now);
         this.foldersAt = undefined;
         return 0;
       }
       throw error;
     }
+    const report = result.changedFolderIds.length > 0 ? log.info : log.debug;
+    report(fromStart ? 'Read a page of a folder' : 'Checked a folder for news', {
+      ...fields,
+      changed: result.changedFolderIds.length > 0,
+      more: result.more,
+      ms: Math.round(performance.now() - started),
+    });
     if (!result.more) this.checkedAt.set(folder.id, now);
     if (result.changedFolderIds.length > 0) {
       events.messagesChanged(result.changedFolderIds);

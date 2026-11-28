@@ -10,8 +10,12 @@ import {
 } from 'electron';
 import { CORE_PORT, CORE_PORT_REQUEST, type HostRequests, type HostServices } from '@shared/api';
 import { createClient, createServer, type Endpoint, type Handlers } from '@shared/rpc';
+import { createLog } from '@shared/log';
 import corePath from '../core/index?modulePath';
+import { logCoreOutput } from './logging';
 import { isTrustedSender } from './renderer-site';
+
+const log = createLog('core-process');
 
 let core: UtilityProcess | undefined;
 let host: ReturnType<typeof createClient<HostRequests>> | undefined;
@@ -25,17 +29,21 @@ function fork(): void {
   mkdirSync(dataDirectory, { recursive: true });
   const child = utilityProcess.fork(corePath, [], {
     serviceName: 'Outlo Mail Core',
+    // Its output carries its log lines, which the main process writes to the log file.
+    stdio: 'pipe',
     env: {
       ...process.env,
       OUTLO_DATABASE: join(dataDirectory, demo ? 'demo.db' : 'mail.db'),
       OUTLO_DEMO: demo ? '1' : '0',
     },
   });
+  logCoreOutput(child);
+  log.info('Started the core', { demo });
   child.on('exit', (code) => {
     if (core !== child) return;
     core = undefined;
     host = undefined;
-    if (!quitting) console.error(`Core process exited unexpectedly with code ${code}`);
+    if (!quitting) log.error('The core ended unexpectedly', { code });
   });
 
   // A line of its own for the main process, for the requests the UI is not allowed to send.

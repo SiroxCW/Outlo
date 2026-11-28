@@ -4,6 +4,7 @@ import { handleAccountRequests } from './accounts';
 import { handleAppProtocol, registerAppScheme } from './app-protocol';
 import { handleAttachmentRequests } from './attachments';
 import { startCore } from './core-process';
+import { startLogging, watchContents } from './logging';
 import { getMicrosoftToken } from './microsoft/sign-in';
 import { hardenSession, hardenWebContents } from './security';
 import {
@@ -26,6 +27,7 @@ if (process.env.FLATPAK_ID) app.setDesktopName(`${process.env.FLATPAK_ID}.deskto
 
 // Two running copies would both write to the same mail database.
 if (!app.requestSingleInstanceLock()) app.exit();
+else startLogging();
 app.on('second-instance', () => {
   const [window] = BrowserWindow.getAllWindows();
   if (window?.isMinimized()) window.restore();
@@ -37,8 +39,13 @@ app.enableSandbox();
 
 // Web accounts run in sessions of their own and follow their own rules.
 app.on('web-contents-created', (_event, contents) => {
-  if (isWebAccountContents(contents)) guardWebAccountContents(contents);
-  else hardenWebContents(contents);
+  if (isWebAccountContents(contents)) {
+    guardWebAccountContents(contents);
+    watchContents(contents, 'web');
+  } else {
+    hardenWebContents(contents);
+    watchContents(contents, 'window');
+  }
 });
 app.on('window-all-closed', () => app.quit());
 
