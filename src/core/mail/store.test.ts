@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ListOptions, MessageFilter, MessageSort } from '@shared/api';
 import { openDatabase } from '../db/database';
 import { GROUP_KEYS, MailStore, type NewMessage } from './store';
+import { indexStoredTexts, TEXT_INDEX_VERSION } from './text-index';
 
 let db: DatabaseSync;
 let store: MailStore;
@@ -238,6 +239,105 @@ describe('search', () => {
     add();
     expect(() => store.search('"*" OR NEAR( subject: -- ^', 10)).not.toThrow();
     expect(store.search('""', 10)).toEqual([]);
+  });
+});
+
+describe('search in the text of messages', () => {
+  const ids = (query: string) => store.search(query, 10).map((entry) => entry.id);
+  const html = (content: string) => ({ contentType: 'html', content }) as const;
+
+  it('finds a message by a word that only its text contains, once the text is stored', () => {
+    const id = add();
+    expect(ids('pineapple')).toEqual([]);
+    store.saveBody(
+      id,
+      html('<p>Bring a <b>pine</b>apple, please.</p><style>.hidden{}</style>'),
+      [],
+    );
+    expect(ids('pineapple')).toEqual([id]);
+    expect(ids('hidden')).toEqual([]);
+  });
+
+  it('lets each word match another part of the message', () => {
+    const id = add({ from: { name: 'Mira Falk', address: 'mira@quillon.example' } });
+    add({ subject: 'Invoice' });
+    store.saveBody(id, html('<p>The invoice is attached.</p>'), []);
+    expect(ids('mira invoice')).toEqual([id]);
+    expect(ids('mira holiday')).toEqual([]);
+  });
+
+  it('lists a message once, also when it matches in the header and in the text', () => {
+    const id = add({ subject: 'Invoice' });
+    store.saveBody(id, html('<p>Invoice attached</p>'), []);
+    expect(ids('invoice')).toEqual([id]);
+  });
+
+  it('forgets the old words when the text is replaced or deleted', () => {
+    const id = add();
+    store.saveBody(id, html('<p>pineapple</p>'), []);
+    store.saveBody(id, { contentType: 'text', content: 'mango' }, []);
+    expect(ids('pineapple')).toEqual([]);
+    expect(ids('mango')).toEqual([id]);
+
+    db.prepare('DELETE FROM message_bodies WHERE message_id = ?').run(id);
+    expect(ids('mango')).toEqual([]);
+  });
+
+  it('forgets the words together with the message', () => {
+    const id = add();
+    store.saveBody(id, html('<p>pineapple</p>'), []);
+    store.deleteAllAccounts();
+    const other = store.insertAccount('demo', 'b@x.example', 'B', 0);
+    const folderId = store.insertFolder({
+      accountId: other,
+      parentId: null,
+      isFavorite: false,
+      name: 'Inbox',
+      role: 'inbox',
+      sortOrder: 0,
+    });
+    // The new message may get the ID of the deleted one. It must not inherit its words.
+    const fresh = store.insertMessage(message({ accountId: other, folderId }));
+    expect(fresh).toBe(id);
+    expect(ids('pineapple')).toEqual([]);
+  });
+});
+
+describe('indexStoredTexts', () => {
+  const ids = (query: string) => store.search(query, 10).map((entry) => entry.id);
+
+  it('indexes texts stored before, in batches, and only once per version', async () => {
+    const stored = Array.from({ length: 250 }, () => add());
+    for (const id of stored) {
+      db.prepare("INSERT INTO message_bodies VALUES (?, 'text', 'kiwi')").run(id);
+    }
+    expect(ids('kiwi')).toEqual([]);
+
+    await indexStoredTexts(store, () => false);
+    expect(store.search('kiwi', 500)).toHaveLength(250);
+    expect(store.getSetting('search.textVersion')).toBe(TEXT_INDEX_VERSION);
+
+    // Done is done: a text that is somehow missing from the index stays missing.
+    store.clearTextIndex();
+    await indexStoredTexts(store, () => false);
+    expect(ids('kiwi')).toEqual([]);
+  });
+
+  it('starts from nothing for a new version, without doubling what is there', async () => {
+    const id = add();
+    store.saveBody(id, { contentType: 'text', content: 'kiwi' }, []);
+    store.setSetting('search.textVersion', '0');
+    await indexStoredTexts(store, () => false);
+    expect(ids('kiwi')).toEqual([id]);
+    const rows = db.prepare("SELECT rowid FROM message_text_fts WHERE text MATCH 'kiwi'").all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('stops when the core closes', async () => {
+    add();
+    db.prepare("INSERT INTO message_bodies VALUES (1, 'text', 'kiwi')").run();
+    await indexStoredTexts(store, () => true);
+    expect(store.getSetting('search.textVersion')).toBeNull();
   });
 });
 

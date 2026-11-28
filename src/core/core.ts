@@ -19,6 +19,7 @@ import { DEFAULT_DEMO_OPTIONS, DemoSeeder, type DemoOptions } from './demo/seede
 import type { Fetch } from './graph/client';
 import { RemoteImages, type ImageLoader } from './mail/remote-images';
 import { MailStore } from './mail/store';
+import { indexStoredTexts } from './mail/text-index';
 import { SyncEngine } from './sync/engine';
 import * as check from './validate';
 
@@ -62,6 +63,8 @@ export function createCore(options: CoreOptions) {
   let seeding: Promise<void> = Promise.resolve();
   let engine: SyncEngine | undefined;
   const remoteImages = options.loadImage ? new RemoteImages(options.loadImage) : undefined;
+  // Until it is done, search finds texts stored before this start by their headers only.
+  const textsIndexed = indexStoredTexts(store, () => closed).catch(() => undefined);
 
   // Headers first, bodies later: the text of a demo message is made up when it is opened.
   function getMessage(messageId: number) {
@@ -285,6 +288,7 @@ export function createCore(options: CoreOptions) {
     },
 
     seedDemoData,
+    textsIndexed,
     close(): void {
       closed = true;
       engine?.stop();

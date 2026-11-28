@@ -147,4 +147,19 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX messages_by_folder_subject ON messages(folder_id, subject COLLATE NOCASE,
     received_at DESC, id DESC);
   `,
+
+  // Search in the text of messages. The row ID is the message ID. The index keeps no copy of
+  // the text: the core turns each stored text into words when it saves it, and fills the index
+  // for texts that were stored before (setting search.textVersion). A text that goes, also with
+  // its message, takes its words along.
+  `
+  CREATE VIRTUAL TABLE message_text_fts USING fts5(
+    text,
+    content = '', contentless_delete = 1,
+    tokenize = 'unicode61 remove_diacritics 2'
+  );
+  CREATE TRIGGER message_text_fts_delete AFTER DELETE ON message_bodies BEGIN
+    DELETE FROM message_text_fts WHERE rowid = old.message_id;
+  END;
+  `,
 ];

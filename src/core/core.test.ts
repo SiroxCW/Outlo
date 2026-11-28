@@ -154,6 +154,33 @@ describe('core', () => {
     expect(found.length).toBeLessThanOrEqual(5);
   });
 
+  it('finds a message by a word of its text once the text is stored', async () => {
+    const { client, inbox } = await startSeeded();
+    const [summary] = (
+      await client.request('messages.list', {
+        folderId: inbox.id,
+        filter: 'all',
+        offset: 0,
+        limit: 1,
+      })
+    ).messages;
+    const { id, subject, preview, from } = summary!;
+    const opened = await client.request('messages.get', { id });
+
+    // A word of the text that the header does not contain, so only the text can match it.
+    const header = `${subject} ${preview} ${from.name} ${from.address}`.toLowerCase();
+    const word = opened!
+      .body!.content.replace(/<[^>]*>/g, ' ')
+      .split(/[^a-z]+/i)
+      .find((entry) => entry.length > 4 && !header.includes(entry.toLowerCase()));
+    expect(word).toBeDefined();
+    const found = await client.request('messages.search', {
+      query: `${word} ${from.name}`,
+      limit: 500,
+    });
+    expect(found.map((message) => message.id)).toContain(id);
+  });
+
   it('rejects requests with wrong or oversized parameters', async () => {
     const { raw, inbox } = await startSeeded();
     const list = (params: object) =>

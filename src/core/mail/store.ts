@@ -19,7 +19,8 @@ import type {
 } from '@shared/api';
 import { transaction, type Database } from '../db/database';
 import type { RemoteMessage } from '../graph/mapping';
-import { toFtsQuery } from './fts-query';
+import { toFtsTerms } from './fts-query';
+import { bodyText } from './text';
 
 type Row = Record<string, unknown>;
 
@@ -342,15 +343,33 @@ export class MailStore {
     };
   }
 
+  // Every word has to occur in the message, but each may be in another part: "anna invoice"
+  // finds a mail from Anna that mentions the invoice only in its text.
   search(query: string, limit: number): MessageSummary[] {
-    const match = toFtsQuery(query);
-    if (!match) return [];
+    const terms = toFtsTerms(query);
+    if (terms.length === 0) return [];
+    const matches = `m.id IN (
+      SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?
+      UNION SELECT rowid FROM message_text_fts WHERE message_text_fts MATCH ?)`;
     return this.sql(
-      `SELECT ${SUMMARY_COLUMNS} FROM messages_fts f JOIN messages m ON m.id = f.rowid
-       WHERE messages_fts MATCH ? ORDER BY m.received_at DESC, m.id DESC LIMIT ?`,
+      `SELECT ${SUMMARY_COLUMNS} FROM messages m WHERE ${terms.map(() => matches).join(' AND ')}
+       ORDER BY m.received_at DESC, m.id DESC LIMIT ?`,
     )
-      .all(match, limit)
+      .all(...terms.flatMap((term) => [term, term]), limit)
       .map(toSummary);
+  }
+
+  // Stored texts in the order of their message IDs, to fill the search index in steps.
+  listBodies(afterId: number, limit: number): { messageId: number; body: MessageBody }[] {
+    return this.sql(
+      `SELECT message_id, content_type, content FROM message_bodies WHERE message_id > ?
+       ORDER BY message_id LIMIT ?`,
+    )
+      .all(afterId, limit)
+      .map((row) => ({
+        messageId: row.message_id as number,
+        body: { contentType: row.content_type as 'html' | 'text', content: row.content as string },
+      }));
   }
 
   // The text of a message as it was received, or null when it is not stored.
@@ -453,6 +472,20 @@ export class MailStore {
     this.sql(
       'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
     ).run(key, value);
+  }
+
+  // Puts the words of a stored text into the search index, in place of what was there. The
+  // index takes a second row with the same ID without complaint, so the old one goes first.
+  indexBody(messageId: number, body: MessageBody): void {
+    this.sql('DELETE FROM message_text_fts WHERE rowid = ?').run(messageId);
+    this.sql('INSERT INTO message_text_fts (rowid, text) VALUES (?, ?)').run(
+      messageId,
+      bodyText(body),
+    );
+  }
+
+  clearTextIndex(): void {
+    this.sql("INSERT INTO message_text_fts (message_text_fts) VALUES ('delete-all')").run();
   }
 
   // Writes used by providers when they bring in data.
@@ -785,6 +818,7 @@ export class MailStore {
          ON CONFLICT (message_id) DO UPDATE SET content_type = excluded.content_type,
            content = excluded.content`,
       ).run(messageId, body.contentType, body.content);
+      this.indexBody(messageId, body);
       this.sql('DELETE FROM attachments WHERE message_id = ?').run(messageId);
       const insert = this.sql(
         `INSERT INTO attachments (message_id, remote_id, name, content_type, size, is_inline,
