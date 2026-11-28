@@ -3,9 +3,10 @@ import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { Folder, MessageFilter, MessageSummary } from '@shared/api';
-import type { MessageListSource, MessageListState } from '../core/messageList';
+import type { ListView, MessageListSource, MessageListState } from '../core/messageList';
 import { t } from '../i18n';
 import { createListLayout } from './listLayout';
+import { ListMenus } from './ListMenus';
 import { MESSAGE_ROW_HEIGHT, MessageRow } from './MessageRow';
 
 const HEADER_ROW_HEIGHT = 32;
@@ -59,16 +60,18 @@ const useStyles = makeStyles({
 interface MessageListProps {
   folder: Folder | undefined;
   filter: MessageFilter;
+  view: ListView;
   source: MessageListSource | undefined;
   state: MessageListState | undefined;
   selectedId: number | undefined;
   onFilter(filter: MessageFilter): void;
+  onView(view: ListView): void;
   onSelect(message: MessageSummary): void;
 }
 
 export function MessageList(props: MessageListProps) {
   const styles = useStyles();
-  const { folder, source, state, selectedId } = props;
+  const { folder, view, source, state, selectedId } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const selectedOffset = useRef<number>(undefined);
@@ -110,7 +113,15 @@ export function MessageList(props: MessageListProps) {
     if (step === 0 || !source || !state || state.total === 0) return;
     event.preventDefault();
 
-    const current = selectedOffset.current;
+    // A filtered list drops the message that was open before, so the open one may have moved.
+    let current = selectedOffset.current;
+    if (
+      current !== undefined &&
+      selectedId !== undefined &&
+      source.get(current)?.id !== selectedId
+    ) {
+      current = source.offsetOf(selectedId) ?? current;
+    }
     const offset = Math.min(
       state.total - 1,
       Math.max(0, current === undefined ? 0 : current + step),
@@ -138,10 +149,18 @@ export function MessageList(props: MessageListProps) {
         ) : (
           <span className={styles.title}>{folder?.name}</span>
         )}
+        <ListMenus
+          show={view.show}
+          sort={view.sort}
+          onShow={(show) => props.onView({ ...view, show })}
+          onSort={(sort) => props.onView({ ...view, sort })}
+        />
       </div>
 
       {state?.loaded && state.total === 0 ? (
-        <div className={styles.empty}>{t('list.empty')}</div>
+        <div className={styles.empty}>
+          {t(view.show === 'all' ? 'list.empty' : 'list.emptyFiltered')}
+        </div>
       ) : (
         <div
           ref={scrollRef}

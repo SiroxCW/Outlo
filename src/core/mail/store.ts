@@ -1,4 +1,4 @@
-import type { StatementSync } from 'node:sqlite';
+import type { SQLInputValue, StatementSync } from 'node:sqlite';
 import type {
   Account,
   Address,
@@ -7,11 +7,15 @@ import type {
   FolderRole,
   Importance,
   InlineImage,
+  ListFilter,
+  ListOptions,
   Message,
   MessageBody,
   MessageFilter,
   MessagePage,
+  MessageSort,
   MessageSummary,
+  SortField,
 } from '@shared/api';
 import { transaction, type Database } from '../db/database';
 import type { RemoteMessage } from '../graph/mapping';
@@ -154,6 +158,60 @@ function toAttachment(row: Row): Attachment {
   };
 }
 
+// The conditions of the Filter menu. "To me" means on the To line; a copy (Cc) does not count.
+const SHOW: Record<ListFilter, string | null> = {
+  all: null,
+  unread: 'm.is_read = 0',
+  flagged: 'm.is_flagged = 1',
+  hasFiles: 'm.has_attachments = 1',
+  toMe: `EXISTS (
+    SELECT 1 FROM json_each(m.to_recipients) r JOIN accounts a ON a.id = m.account_id
+    WHERE lower(json_extract(r.value, '$.address')) = lower(a.email))`,
+};
+
+// What a list sorted by a field is grouped by. The list is ordered by the same expression, so
+// the groups and the list agree. Case does not split a group.
+export const GROUP_KEYS: Record<Exclude<SortField, 'date'>, string> = {
+  from: "(CASE WHEN m.from_name <> '' THEN m.from_name ELSE m.from_address END) COLLATE NOCASE",
+  subject: 'm.subject COLLATE NOCASE',
+  importance: 'm.importance',
+  flag: 'm.is_flagged',
+};
+
+// Which messages of a folder a list shows. Only fixed parts of SQL are put together here; every
+// value is a parameter.
+function listWhere(
+  folderId: number,
+  filter: MessageFilter,
+  options: ListOptions,
+): { where: string; params: SQLInputValue[] } {
+  const parts = ['m.folder_id = ?'];
+  const params: SQLInputValue[] = [folderId];
+  if (filter !== 'all') parts.push(`m.is_focused = ${filter === 'focused' ? 1 : 0}`);
+  const condition = SHOW[options.show ?? 'all'];
+  if (condition && options.keepId !== undefined) {
+    parts.push(`(${condition} OR m.id = ?)`);
+    params.push(options.keepId);
+  } else if (condition) {
+    parts.push(condition);
+  }
+  return { where: parts.join(' AND '), params };
+}
+
+function orderBy(sort: MessageSort | undefined): string {
+  const field = sort?.field ?? 'date';
+  const direction = sort?.descending === false ? 'ASC' : 'DESC';
+  if (field === 'date') return `m.received_at ${direction}, m.id ${direction}`;
+  // Inside a group the newest message comes first, whichever way the groups run.
+  return `${GROUP_KEYS[field]} ${direction}, m.received_at DESC, m.id DESC`;
+}
+
+function groupValue(field: SortField, value: unknown): string {
+  if (field === 'importance') return IMPORTANCE[value as number] ?? 'normal';
+  if (field === 'flag') return value === 1 ? 'flagged' : 'unflagged';
+  return String(value);
+}
+
 // All reads and writes of mail data go through this class. Statements are prepared once.
 export class MailStore {
   private readonly statements = new Map<string, StatementSync>();
@@ -195,33 +253,58 @@ export class MailStore {
     filter: MessageFilter,
     offset: number,
     limit: number,
+    options: ListOptions = {},
   ): MessagePage {
-    const focus = filter === 'all' ? '' : `AND m.is_focused = ${filter === 'focused' ? 1 : 0}`;
-    const count = this.sql(
-      `SELECT count(*) AS total FROM messages m WHERE m.folder_id = ? ${focus}`,
-    ).get(folderId) as { total: number };
+    const { where, params } = listWhere(folderId, filter, options);
+    const count = this.sql(`SELECT count(*) AS total FROM messages m WHERE ${where}`).get(
+      ...params,
+    ) as { total: number };
     const rows = this.sql(
-      `SELECT ${SUMMARY_COLUMNS} FROM messages m WHERE m.folder_id = ? ${focus}
-       ORDER BY m.received_at DESC, m.id DESC LIMIT ? OFFSET ?`,
-    ).all(folderId, limit, offset);
+      `SELECT ${SUMMARY_COLUMNS} FROM messages m WHERE ${where}
+       ORDER BY ${orderBy(options.sort)} LIMIT ? OFFSET ?`,
+    ).all(...params, limit, offset);
     return { total: count.total, offset, messages: rows.map(toSummary) };
   }
 
-  countByTime(folderId: number, filter: MessageFilter, boundaries: number[]): number[] {
-    const focus = filter === 'all' ? '' : `AND is_focused = ${filter === 'focused' ? 1 : 0}`;
+  countByTime(
+    folderId: number,
+    filter: MessageFilter,
+    boundaries: number[],
+    options: ListOptions = {},
+  ): number[] {
+    const { where, params } = listWhere(folderId, filter, options);
     // One pass over the folder index. Each column counts the messages newer than one boundary.
     const columns = boundaries.map(
-      (_, index) => `count(*) FILTER (WHERE received_at >= ?) AS c${index}`,
+      (_, index) => `count(*) FILTER (WHERE m.received_at >= ?) AS c${index}`,
     );
     const row = this.sql(
       `SELECT count(*) AS total, ${['0 AS none', ...columns].join(', ')}
-       FROM messages WHERE folder_id = ? ${focus}`,
-    ).get(...boundaries, folderId) as Record<string, number>;
+       FROM messages m WHERE ${where}`,
+    ).get(...boundaries, ...params) as Record<string, number>;
 
     const newerThan = boundaries.map((_, index) => row[`c${index}`] ?? 0);
     return [...newerThan, row.total ?? 0].map(
       (count, index) => count - (newerThan[index - 1] ?? 0),
     );
+  }
+
+  // The groups of a list that is sorted by anything but date. A list sorted by date is grouped
+  // by day in the UI, with countByTime.
+  countByGroup(
+    folderId: number,
+    filter: MessageFilter,
+    options: ListOptions = {},
+  ): { value: string; count: number }[] {
+    const field = options.sort?.field ?? 'date';
+    if (field === 'date') return [];
+    const { where, params } = listWhere(folderId, filter, options);
+    const direction = options.sort?.descending ? 'DESC' : 'ASC';
+    return this.sql(
+      `SELECT ${GROUP_KEYS[field]} AS value, count(*) AS count FROM messages m WHERE ${where}
+       GROUP BY 1 ORDER BY 1 ${direction}`,
+    )
+      .all(...params)
+      .map((row) => ({ value: groupValue(field, row.value), count: row.count as number }));
   }
 
   getMessage(id: number): Message | null {

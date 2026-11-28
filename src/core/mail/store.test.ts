@@ -1,7 +1,10 @@
+import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { ListOptions, MessageFilter, MessageSort } from '@shared/api';
 import { openDatabase } from '../db/database';
-import { MailStore, type NewMessage } from './store';
+import { GROUP_KEYS, MailStore, type NewMessage } from './store';
 
+let db: DatabaseSync;
 let store: MailStore;
 let accountId: number;
 let inbox: number;
@@ -36,7 +39,8 @@ function add(overrides: Partial<NewMessage> = {}): number {
 const folder = (id: number) => store.listFolders().find((entry) => entry.id === id)!;
 
 beforeEach(() => {
-  store = new MailStore(openDatabase(':memory:'));
+  db = openDatabase(':memory:');
+  store = new MailStore(db);
   accountId = store.insertAccount('demo', 'alex@mailbox.example', 'Alex Morgan', 0);
   const base = { accountId, parentId: null, isFavorite: false };
   inbox = store.insertFolder({ ...base, name: 'Inbox', role: 'inbox', sortOrder: 0 });
@@ -257,6 +261,130 @@ describe('countByTime', () => {
     add({ receivedAt: 20 });
     expect(store.countByTime(inbox, 'other', [15])).toEqual([0, 1]);
     expect(store.countByTime(inbox, 'all', [])).toEqual([2]);
+  });
+});
+
+describe('filters', () => {
+  const ids = (options: ListOptions, filter: MessageFilter = 'all') =>
+    store.listMessages(inbox, filter, 0, 50, options).messages.map((entry) => entry.id);
+  const toSam = [{ name: 'Sam', address: 'sam@x.example' }];
+
+  it('leaves in only what the filter asks for, and counts the same', () => {
+    const unread = add({ to: toSam });
+    const flagged = add({ isRead: true, isFlagged: true, to: toSam });
+    const withFiles = add({ isRead: true, hasAttachments: true, to: toSam });
+    // "To me" is the To line, whatever the case of the address. A copy does not count.
+    const toMe = add({ isRead: true, to: [{ name: 'Alex', address: 'ALEX@Mailbox.example' }] });
+    add({ isRead: true, to: toSam, cc: [{ name: 'Alex', address: 'alex@mailbox.example' }] });
+
+    expect(ids({ show: 'unread' })).toEqual([unread]);
+    expect(ids({ show: 'flagged' })).toEqual([flagged]);
+    expect(ids({ show: 'hasFiles' })).toEqual([withFiles]);
+    expect(ids({ show: 'toMe' })).toEqual([toMe]);
+    expect(ids({ show: 'all' })).toHaveLength(5);
+    expect(store.listMessages(inbox, 'all', 0, 50, { show: 'unread' }).total).toBe(1);
+    expect(store.countByTime(inbox, 'all', [], { show: 'flagged' })).toEqual([1]);
+  });
+
+  it('works together with Focused and Other', () => {
+    add({ isFocused: false });
+    const otherRead = add({ isFocused: false, isRead: true, isFlagged: true });
+    add({ isFocused: true, isFlagged: true });
+    expect(ids({ show: 'flagged' }, 'other')).toEqual([otherRead]);
+  });
+
+  it('keeps the open message, but only in its own folder', () => {
+    const open = add({ isRead: true, receivedAt: 200 });
+    const unread = add({ receivedAt: 100 });
+    const elsewhere = add({ folderId: archive, isRead: true });
+    expect(ids({ show: 'unread', keepId: open })).toEqual([open, unread]);
+    expect(store.countByTime(inbox, 'all', [150], { show: 'unread', keepId: open })).toEqual([
+      1, 1,
+    ]);
+    expect(ids({ show: 'unread', keepId: elsewhere })).toEqual([unread]);
+    // Without a filter there is nothing to keep, and the message is not listed twice.
+    expect(ids({ keepId: open })).toEqual([open, unread]);
+  });
+});
+
+describe('sorting', () => {
+  const list = (sort: MessageSort) => store.listMessages(inbox, 'all', 0, 50, { sort }).messages;
+
+  it('sorts by date both ways', () => {
+    const old = add({ receivedAt: 100 });
+    const recent = add({ receivedAt: 300 });
+    const sort = { field: 'date', descending: false } as const;
+    expect(list(sort).map((entry) => entry.id)).toEqual([old, recent]);
+    expect(store.countByGroup(inbox, 'all', { sort })).toEqual([]);
+  });
+
+  it('groups by sender without regard to case, newest first inside a group', () => {
+    add({ from: { name: 'bert', address: 'b@x.example' }, receivedAt: 100 });
+    add({ from: { name: 'Anna', address: 'a@x.example' }, receivedAt: 100 });
+    add({ from: { name: '', address: 'carl@x.example' }, receivedAt: 100 });
+    add({ from: { name: 'anna', address: 'a2@x.example' }, receivedAt: 300 });
+    const sort = { field: 'from', descending: false } as const;
+
+    const groups = store.countByGroup(inbox, 'all', { sort });
+    expect(groups.map((group) => [group.value.toLowerCase(), group.count])).toEqual([
+      ['anna', 2],
+      ['bert', 1],
+      ['carl@x.example', 1],
+    ]);
+    expect(list(sort).map((entry) => entry.from.address)).toEqual([
+      'a2@x.example',
+      'a@x.example',
+      'b@x.example',
+      'carl@x.example',
+    ]);
+    const reversed = { field: 'from', descending: true } as const;
+    expect(store.countByGroup(inbox, 'all', { sort: reversed })[0]?.value).toBe('carl@x.example');
+    expect(list(reversed)[0]?.from.address).toBe('carl@x.example');
+  });
+
+  it('groups by subject, importance and flag in the order of the list', () => {
+    add({ subject: 'Budget', importance: 'low' });
+    add({ subject: 'agenda', importance: 'high', isFlagged: true });
+    add({ subject: 'Agenda', importance: 'normal' });
+
+    expect(
+      store.countByGroup(inbox, 'all', { sort: { field: 'subject', descending: false } }),
+    ).toMatchObject([{ count: 2 }, { value: 'Budget', count: 1 }]);
+    const importance = { field: 'importance', descending: true } as const;
+    expect(store.countByGroup(inbox, 'all', { sort: importance })).toEqual([
+      { value: 'high', count: 1 },
+      { value: 'normal', count: 1 },
+      { value: 'low', count: 1 },
+    ]);
+    expect(list(importance).map((entry) => entry.importance)).toEqual(['high', 'normal', 'low']);
+    expect(store.countByGroup(inbox, 'all', { sort: { field: 'flag', descending: true } })).toEqual(
+      [
+        { value: 'flagged', count: 1 },
+        { value: 'unflagged', count: 2 },
+      ],
+    );
+  });
+
+  it('reads lists sorted by sender or subject from an index', () => {
+    for (const [field, index] of [
+      ['from', 'messages_by_folder_sender'],
+      ['subject', 'messages_by_folder_subject'],
+    ] as const) {
+      const plan = db
+        .prepare(
+          `EXPLAIN QUERY PLAN SELECT m.id FROM messages m WHERE m.folder_id = ?
+           ORDER BY ${GROUP_KEYS[field]} ASC, m.received_at DESC, m.id DESC LIMIT 100 OFFSET 5000`,
+        )
+        .all(inbox);
+      expect(plan.map((row) => row.detail).join(' ')).toContain(index);
+    }
+  });
+
+  it('counts the groups of a filtered list only', () => {
+    add({ subject: 'Read', isRead: true });
+    add({ subject: 'Unread' });
+    const options = { show: 'unread', sort: { field: 'subject', descending: false } } as const;
+    expect(store.countByGroup(inbox, 'all', options)).toEqual([{ value: 'Unread', count: 1 }]);
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDateGroups } from './dateGroups';
 import { formatListTime, formatSize } from './format';
 import { createListLayout, type ListGroup } from './listLayout';
+import { DEFAULT_SORT, formatSort, groupLabel, parseSort, sortBy } from './sorting';
 
 const at = (year: number, month: number, day: number, hour = 0) =>
   new Date(year, month - 1, day, hour).getTime();
@@ -132,5 +133,35 @@ describe('formatSize', () => {
     expect(formatSize(512)).toBe('512 B');
     expect(formatSize(20_480)).toBe('20 KB');
     expect(formatSize(3_145_728)).toBe('3.0 MB');
+  });
+});
+
+describe('sorting', () => {
+  it('stores a sort as text and reads it back', () => {
+    const sort = { field: 'subject', descending: false } as const;
+    expect(parseSort(formatSort(sort))).toEqual(sort);
+    expect(parseSort(formatSort(DEFAULT_SORT))).toEqual(DEFAULT_SORT);
+  });
+
+  it('falls back to newest first for anything it does not know', () => {
+    for (const value of ['', 'size:desc', 'date', 'date:up', 'from:asc:extra']) {
+      expect(parseSort(value)).toEqual(DEFAULT_SORT);
+    }
+  });
+
+  it('starts names at A and the rest with the most important on top', () => {
+    expect(sortBy('from')).toEqual({ field: 'from', descending: false });
+    expect(sortBy('subject').descending).toBe(false);
+    expect(sortBy('date').descending).toBe(true);
+    expect(sortBy('importance').descending).toBe(true);
+    expect(sortBy('flag').descending).toBe(true);
+  });
+
+  it('names the groups, also the empty ones', () => {
+    expect(groupLabel('from', 'Anna Berg')).toBe('Anna Berg');
+    expect(groupLabel('from', '')).toBe('(No sender)');
+    expect(groupLabel('subject', '  ')).toBe('(No subject)');
+    expect(groupLabel('importance', 'high')).toBe('High importance');
+    expect(groupLabel('flag', 'unflagged')).toBe('Not flagged');
   });
 });

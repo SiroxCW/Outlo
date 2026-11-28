@@ -82,7 +82,25 @@ export interface Message extends MessageSummary {
   inlineImages: InlineImage[];
 }
 
+// Which part of an inbox is shown: its Focused or its Other tab. Other folders use 'all'.
 export type MessageFilter = 'all' | 'focused' | 'other';
+
+// The Filter menu above the message list. "To me" means on the To line, as in Outlook.
+export type ListFilter = 'all' | 'unread' | 'flagged' | 'toMe' | 'hasFiles';
+export type SortField = 'date' | 'from' | 'subject' | 'importance' | 'flag';
+export interface MessageSort {
+  field: SortField;
+  descending: boolean;
+}
+
+// Narrows and orders the messages of a folder. Left out, a list shows all, newest first.
+export interface ListOptions {
+  show?: ListFilter;
+  sort?: MessageSort;
+  // Stays in the list although it no longer passes the filter: the message the user has open,
+  // which would otherwise vanish from an unread list the moment it is read.
+  keepId?: number;
+}
 
 export type SyncState =
   // Headers are still being fetched.
@@ -114,15 +132,27 @@ export type CoreRequests = {
   'accounts.list': { params: undefined; result: Account[] };
   'folders.list': { params: undefined; result: Folder[] };
   'messages.list': {
-    params: { folderId: number; filter: MessageFilter; offset: number; limit: number };
+    params: {
+      folderId: number;
+      filter: MessageFilter;
+      offset: number;
+      limit: number;
+    } & ListOptions;
     result: MessagePage;
   };
-  // Number of messages per time span. The boundaries are timestamps, newest first. The result
-  // has one more entry than there are boundaries: newer than the first, between each pair,
-  // older than the last.
+  // Number of messages per time span, for a list sorted by date. The boundaries are timestamps,
+  // newest first. The result has one more entry than there are boundaries: newer than the first,
+  // between each pair, older than the last.
   'messages.countByTime': {
-    params: { folderId: number; filter: MessageFilter; boundaries: number[] };
+    params: { folderId: number; filter: MessageFilter; boundaries: number[] } & ListOptions;
     result: number[];
+  };
+  // The groups of a list sorted by anything but date, in the order of the list. The value is the
+  // sender or subject as written, or for importance and flag one of high, normal, low, flagged,
+  // unflagged.
+  'messages.countByGroup': {
+    params: { folderId: number; filter: MessageFilter } & ListOptions;
+    result: { value: string; count: number }[];
   };
   'messages.get': { params: { id: number }; result: Message | null };
   // Like messages.get, but fetches the text from the mail provider when it is not stored yet.

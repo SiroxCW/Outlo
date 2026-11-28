@@ -137,4 +137,14 @@ export const MIGRATIONS: string[] = [
     content BLOB NOT NULL
   ) STRICT;
   `,
+
+  // Lists sorted by sender or subject. Without these, every page deep in a large folder sorts
+  // the whole folder again. The expressions have to match GROUP_KEYS in the store exactly.
+  `
+  CREATE INDEX messages_by_folder_sender ON messages(folder_id,
+    (CASE WHEN from_name <> '' THEN from_name ELSE from_address END) COLLATE NOCASE,
+    received_at DESC, id DESC);
+  CREATE INDEX messages_by_folder_subject ON messages(folder_id, subject COLLATE NOCASE,
+    received_at DESC, id DESC);
+  `,
 ];

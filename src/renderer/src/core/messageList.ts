@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import type { MessageFilter, MessageSummary } from '@shared/api';
+import type { ListFilter, MessageFilter, MessageSort, MessageSummary } from '@shared/api';
 import { createDateGroups } from '../mail/dateGroups';
 import type { ListGroup } from '../mail/listLayout';
+import { groupLabel } from '../mail/sorting';
 import { t } from '../i18n';
 import { useCoreEvents } from './events';
 
@@ -21,11 +22,18 @@ export interface MessageListState {
   now: Date;
 }
 
+// How the user narrowed and ordered the list, with the Filter and Sort menus.
+export interface ListView {
+  show: ListFilter;
+  sort: MessageSort;
+}
+
 // Holds the part of a folder that is on screen. The list can be any length, because only the
 // pages around the visible rows are fetched and kept.
 export class MessageListSource {
   private state: MessageListState = { groups: [], total: 0, loaded: false, now: new Date() };
   private version = 0;
+  private keepId: number | undefined;
   private readonly pages = new Map<number, Page>();
   private readonly requested = new Set<string>();
   private readonly listeners = new Set<() => void>();
@@ -33,8 +41,36 @@ export class MessageListSource {
   constructor(
     readonly folderId: number,
     readonly filter: MessageFilter,
+    readonly view: ListView,
   ) {
     this.refresh();
+  }
+
+  private get query() {
+    return {
+      folderId: this.folderId,
+      filter: this.filter,
+      show: this.view.show,
+      sort: this.view.sort,
+      ...(this.keepId === undefined ? {} : { keepId: this.keepId }),
+    };
+  }
+
+  // The open message stays in a filtered list until another one is opened.
+  keep(id: number | undefined): void {
+    if (id === this.keepId) return;
+    this.keepId = id;
+    if (this.view.show !== 'all') this.refresh();
+  }
+
+  // Where a message is in the list, if its page is loaded and up to date.
+  offsetOf(id: number): number | undefined {
+    for (const [pageIndex, page] of this.pages) {
+      if (page.version !== this.version) continue;
+      const index = page.messages.findIndex((message) => message.id === id);
+      if (index >= 0) return pageIndex * PAGE_SIZE + index;
+    }
+    return undefined;
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -54,31 +90,43 @@ export class MessageListSource {
   refresh(): void {
     const version = ++this.version;
     const now = new Date();
-    const dateGroups = createDateGroups(now);
-    window.outlo
-      .request('messages.countByTime', {
-        folderId: this.folderId,
-        filter: this.filter,
-        boundaries: dateGroups.map((group) => group.start),
-      })
-      .then((counts) => {
+    this.countGroups(now)
+      .then((counted) => {
         if (version !== this.version) return;
         let offset = 0;
-        const groups = dateGroups.map((group, index) => {
-          const count = counts[index] ?? 0;
-          const entry: ListGroup = {
-            key: group.key,
-            label: 'key' in group.label ? t(group.label.key) : group.label.text,
-            count,
-            offset,
-          };
-          offset += count;
+        const groups = counted.map((group) => {
+          const entry: ListGroup = { ...group, offset };
+          offset += group.count;
           return entry;
         });
         this.state = { groups, total: offset, loaded: true, now };
         this.notify();
       })
       .catch(() => undefined);
+  }
+
+  // A list sorted by date is grouped by day, any other by the value it is sorted by.
+  private async countGroups(now: Date): Promise<Omit<ListGroup, 'offset'>[]> {
+    const { field, descending } = this.view.sort;
+    if (field !== 'date') {
+      const groups = await window.outlo.request('messages.countByGroup', this.query);
+      return groups.map((group) => ({
+        key: `${field}:${group.value}`,
+        label: groupLabel(field, group.value),
+        count: group.count,
+      }));
+    }
+    const dateGroups = createDateGroups(now);
+    const counts = await window.outlo.request('messages.countByTime', {
+      ...this.query,
+      boundaries: dateGroups.map((group) => group.start),
+    });
+    const groups = dateGroups.map((group, index) => ({
+      key: group.key,
+      label: 'key' in group.label ? t(group.label.key) : group.label.text,
+      count: counts[index] ?? 0,
+    }));
+    return descending ? groups : groups.reverse();
   }
 
   // Returns the message at a position if it is loaded, and fetches its page if not.
@@ -96,12 +144,7 @@ export class MessageListSource {
     this.requested.add(key);
 
     window.outlo
-      .request('messages.list', {
-        folderId: this.folderId,
-        filter: this.filter,
-        offset: pageIndex * PAGE_SIZE,
-        limit: PAGE_SIZE,
-      })
+      .request('messages.list', { ...this.query, offset: pageIndex * PAGE_SIZE, limit: PAGE_SIZE })
       .then((result) => {
         this.requested.delete(key);
         if (version !== this.version) return;
@@ -117,15 +160,25 @@ export class MessageListSource {
   }
 }
 
-export function useMessageList(folderId: number | undefined, filter: MessageFilter) {
+export function useMessageList(
+  folderId: number | undefined,
+  filter: MessageFilter,
+  { show, sort: { field, descending } }: ListView,
+  openId: number | undefined,
+) {
   const source = useMemo(
-    () => (folderId === undefined ? undefined : new MessageListSource(folderId, filter)),
-    [folderId, filter],
+    () =>
+      folderId === undefined
+        ? undefined
+        : new MessageListSource(folderId, filter, { show, sort: { field, descending } }),
+    [folderId, filter, show, field, descending],
   );
   const state = useSyncExternalStore(
     source?.subscribe ?? (() => () => undefined),
     source?.getState ?? (() => undefined),
   );
+
+  useEffect(() => source?.keep(openId), [source, openId]);
 
   useCoreEvents(
     (event) =>

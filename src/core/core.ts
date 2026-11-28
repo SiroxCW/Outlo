@@ -7,7 +7,10 @@ import {
   type CoreRequests,
   type HostRequests,
   type HostServices,
+  type ListFilter,
+  type ListOptions,
   type MessageFilter,
+  type SortField,
 } from '@shared/api';
 import { createClient, createServer, type Endpoint } from '@shared/rpc';
 import { openDatabase } from './db/database';
@@ -20,6 +23,8 @@ import { SyncEngine } from './sync/engine';
 import * as check from './validate';
 
 const FILTERS: readonly MessageFilter[] = ['all', 'focused', 'other'];
+const LIST_FILTERS: readonly ListFilter[] = ['all', 'unread', 'flagged', 'toMe', 'hasFiles'];
+const SORT_FIELDS: readonly SortField[] = ['date', 'from', 'subject', 'importance', 'flag'];
 const MAX_IDS_PER_COMMAND = 10_000;
 const DEMO_SEEDED = 'demo.seeded';
 const UI_SETTINGS = 'ui.';
@@ -31,6 +36,21 @@ export interface CoreOptions {
   fetch?: Fetch;
   // How pictures from the internet are fetched. Without it none are.
   loadImage?: ImageLoader;
+}
+
+// The optional filter and sort of a message list. Fields that are left out keep their default.
+function listOptions(input: Record<string, unknown>): ListOptions {
+  const options: ListOptions = {};
+  if (input.show !== undefined) options.show = check.oneOf(input.show, 'show', LIST_FILTERS);
+  if (input.sort !== undefined) {
+    const sort = check.record(input.sort, 'sort');
+    options.sort = {
+      field: check.oneOf(sort.field, 'sort.field', SORT_FIELDS),
+      descending: check.boolean(sort.descending, 'sort.descending'),
+    };
+  }
+  if (input.keepId !== undefined) options.keepId = check.id(input.keepId, 'keepId');
+  return options;
 }
 
 // The core without any Electron code, so tests can run it under plain Node.
@@ -66,6 +86,7 @@ export function createCore(options: CoreOptions) {
         check.oneOf(input.filter, 'filter', FILTERS),
         check.integer(input.offset, 'offset', 0, Number.MAX_SAFE_INTEGER),
         check.integer(input.limit, 'limit', 1, MAX_PAGE_SIZE),
+        listOptions(input),
       );
     },
 
@@ -75,6 +96,16 @@ export function createCore(options: CoreOptions) {
         check.id(input.folderId, 'folderId'),
         check.oneOf(input.filter, 'filter', FILTERS),
         check.timestamps(input.boundaries, 'boundaries', MAX_TIME_BOUNDARIES),
+        listOptions(input),
+      );
+    },
+
+    'messages.countByGroup': (params) => {
+      const input = check.record(params, 'params');
+      return store.countByGroup(
+        check.id(input.folderId, 'folderId'),
+        check.oneOf(input.filter, 'filter', FILTERS),
+        listOptions(input),
       );
     },
 

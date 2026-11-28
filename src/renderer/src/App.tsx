@@ -8,12 +8,19 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useEffect, useRef, useState } from 'react';
-import type { Account, MessageFilter, SessionInfo, TitleBarStyle, WebModule } from '@shared/api';
+import type {
+  Account,
+  ListFilter,
+  MessageFilter,
+  SessionInfo,
+  TitleBarStyle,
+  WebModule,
+} from '@shared/api';
 import { AddAccountDialog } from './accounts/AddAccountDialog';
 import { RemoveAccountDialog } from './accounts/RemoveAccountDialog';
 import { WebAccountView } from './accounts/WebAccountView';
 import { Welcome } from './accounts/Welcome';
-import { useMessageList } from './core/messageList';
+import { useMessageList, type ListView } from './core/messageList';
 import { useMailboxes } from './core/useFolders';
 import { useMessage } from './core/useMessage';
 import { useSession } from './core/useSession';
@@ -22,6 +29,7 @@ import { useSyncStatus } from './core/useSyncStatus';
 import { t } from './i18n';
 import { FolderPane } from './mail/FolderPane';
 import { MessageList } from './mail/MessageList';
+import { formatSort, parseSort } from './mail/sorting';
 import { ReadingPane } from './mail/ReadingPane';
 import { SearchResults } from './mail/SearchResults';
 import { AppBar } from './shell/AppBar';
@@ -83,6 +91,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const syncStatus = useSyncStatus();
   const [chosenFolderId, setChosenFolderId] = useState<number>();
   const [inboxFilter, setInboxFilter] = useState<MessageFilter>('focused');
+  const [show, setShow] = useState<ListFilter>('all');
   const [selectedId, setSelectedId] = useState<number>();
   const [search, setSearch] = useState('');
   const [foldersVisible, setFoldersVisible] = useState(true);
@@ -110,7 +119,13 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
     folders.find((entry) => entry.id === chosenFolderId) ??
     folders.find((entry) => entry.role === 'inbox');
   const filter: MessageFilter = folder?.role === 'inbox' ? inboxFilter : 'all';
-  const { source, state } = useMessageList(folder?.id, filter);
+  // Each folder keeps its own sort. The filter is for the moment and ends with the folder.
+  const view: ListView = { show, sort: parseSort(settings.get(`sort.${folder?.id}`, '')) };
+  const changeView = (next: ListView) => {
+    setShow(next.show);
+    if (folder) settings.set(`sort.${folder.id}`, formatSort(next.sort));
+  };
+  const { source, state } = useMessageList(folder?.id, filter, view, selectedId);
 
   const opened = useMessage(selectedId);
   const message = selectedId === undefined ? null : opened.message;
@@ -231,6 +246,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                           setChosenWebAccountId(undefined);
                           setChosenFolderId(folderId);
                           setSelectedId(undefined);
+                          setShow('all');
                           setSearch('');
                         }}
                       />
@@ -273,10 +289,12 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                         <MessageList
                           folder={folder}
                           filter={filter}
+                          view={view}
                           source={source}
                           state={state}
                           selectedId={selectedId}
                           onFilter={setInboxFilter}
+                          onView={changeView}
                           onSelect={(selected) => setSelectedId(selected.id)}
                         />
                       )}

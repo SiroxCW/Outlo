@@ -81,6 +81,22 @@ describe('core', () => {
     expect(page.messages).toHaveLength(20);
   });
 
+  it('filters and sorts a list, with groups that add up to it', async () => {
+    const { client, inbox } = await startSeeded();
+    const query = {
+      folderId: inbox.id,
+      filter: 'all',
+      show: 'unread',
+      sort: { field: 'from', descending: false },
+    } as const;
+    const groups = await client.request('messages.countByGroup', query);
+    const page = await client.request('messages.list', { ...query, offset: 0, limit: 500 });
+    expect(groups.length).toBeGreaterThan(1);
+    expect(groups.reduce((sum, group) => sum + group.count, 0)).toBe(page.total);
+    expect(page.total).toBe(inbox.unreadCount);
+    expect(page.messages.every((message) => !message.isRead)).toBe(true);
+  });
+
   it('creates the body of a demo message when it is first opened and keeps it', async () => {
     const { client, inbox } = await startSeeded();
     const [summary] = (
@@ -148,6 +164,13 @@ describe('core', () => {
     await expect(list({ offset: -1 })).rejects.toThrow('offset');
     await expect(list({ folderId: '1; DROP TABLE messages' })).rejects.toThrow('folderId');
     await expect(list({ filter: "all' OR 1=1" })).rejects.toThrow('filter');
+    await expect(list({ show: 'everything' })).rejects.toThrow('show');
+    await expect(list({ sort: 'date' })).rejects.toThrow('sort');
+    await expect(list({ sort: { field: 'size', descending: true } })).rejects.toThrow('sort.field');
+    await expect(list({ sort: { field: 'date', descending: 'yes' } })).rejects.toThrow(
+      'sort.descending',
+    );
+    await expect(list({ keepId: -1 })).rejects.toThrow('keepId');
     await expect(raw('messages.list', null)).rejects.toThrow('params');
     await expect(raw('messages.get', { id: 1.5 })).rejects.toThrow('id');
     await expect(raw('messages.setRead', { ids: 'all', isRead: true })).rejects.toThrow('ids');
