@@ -85,7 +85,8 @@ function innerHtml(html: string): string {
 }
 
 // The earlier message below a reply or forward, as Outlook writes it: a line, who wrote it to
-// whom and when, and the message. Without a stored text its beginning has to do.
+// whom and when, and the message. Without a stored text its beginning has to do. The header has
+// no colour of its own, so the quote follows the dark mode wherever the quoted message does.
 export function buildQuote(
   source: QuotedMessage,
   body: MessageBody | null,
@@ -104,8 +105,8 @@ export function buildQuote(
       : escapeHtml(body?.content ?? preview).replace(/\r?\n/g, '<br>');
   return (
     '<hr style="display:inline-block;width:98%" tabindex="-1">' +
-    '<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt" ' +
-    `color="#000000">${header}</font><div>&nbsp;</div></div><div>${content}</div>`
+    '<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt">' +
+    `${header}</font><div>&nbsp;</div></div><div>${content}</div>`
   );
 }
 

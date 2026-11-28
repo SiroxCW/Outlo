@@ -1,15 +1,26 @@
 import DOMPurify from 'dompurify';
 import type { InlineImage, MessageBody } from '@shared/api';
 import { isSafeExternalUrl } from '@shared/links';
+import {
+  darkenAttribute,
+  darkenDeclarations,
+  darkenSheet,
+  type ColorRole,
+  type DarkPalette,
+} from './darkMail';
 
 export interface PrepareOptions {
   inlineImages: InlineImage[];
   // Pictures from the internet that the user asked for, by address. Null: none were asked for.
   remoteImages: Record<string, string> | null;
-  // Colours of the app, used for mail that brings no colours of its own.
+  // Colours of the app. Mail without colours of its own is shown in them, and in dark mode, mail
+  // with colours of its own is changed towards them.
   textColor: string;
   linkColor: string;
+  backgroundColor: string;
   dark: boolean;
+  // Shows mail with colours of its own on white, as its sender designed it, also in dark mode.
+  lightPage?: boolean;
 }
 
 export interface PreparedMail {
@@ -19,6 +30,8 @@ export interface PreparedMail {
   remoteImages: string[];
   // Attachments that are shown inside the text.
   usedContentIds: string[];
+  // Whether the mail brings colours of its own, which dark mode changes.
+  ownColors: boolean;
 }
 
 // The frame gets no network at all. Pictures are only shown from data the app hands it.
@@ -91,6 +104,33 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'IMG') cleanImage(node);
 });
 
+// Old HTML attributes with colours, where they count and what they colour.
+const COLOR_ATTRIBUTES: [selector: string, name: string, role: ColorRole][] = [
+  ['[color]', 'color', 'text'],
+  ['[bgcolor]', 'bgcolor', 'background'],
+  ['[bordercolor]', 'bordercolor', 'line'],
+  ['body[text]', 'text', 'text'],
+  ['body[link]', 'link', 'text'],
+  ['body[vlink]', 'vlink', 'text'],
+  ['body[alink]', 'alink', 'text'],
+];
+
+// Changes the colours of a mail for dark mode, in its styles and its colour attributes.
+function darkenMail(root: Element, palette: DarkPalette): void {
+  const all = (selector: string) =>
+    [root, ...root.querySelectorAll(selector)].filter((element) => element.matches(selector));
+  for (const element of all('[style]')) {
+    element.setAttribute('style', darkenDeclarations(element.getAttribute('style')!, palette));
+  }
+  for (const style of all('style'))
+    style.textContent = darkenSheet(style.textContent ?? '', palette);
+  for (const [selector, name, role] of COLOR_ATTRIBUTES) {
+    for (const element of all(selector)) {
+      element.setAttribute(name, darkenAttribute(element.getAttribute(name)!, role, palette));
+    }
+  }
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -137,17 +177,23 @@ export function prepareMail(body: MessageBody, options: PrepareOptions): Prepare
   });
   run = undefined;
 
-  const mailBody = root.tagName === 'BODY' ? root : root.querySelector('body');
-  const styles = [...root.querySelectorAll('head style')].map((style) => style.outerHTML);
-  // Mail with colours of its own is shown on white, as its sender designed it. Everything else
-  // follows the theme of the app.
+  // Mail with colours of its own is shown on white in light mode, as its sender designed it. In
+  // dark mode its colours are changed to fit, unless the user asked to see it on white. Everything
+  // else follows the theme of the app.
   const ownColors =
     body.contentType === 'html' &&
     root.querySelector('style, [bgcolor], [color], [style*="color" i], [style*="background" i]') !==
       null;
-  const text = ownColors ? '#242424' : options.textColor;
-  const link = ownColors ? '#0f6cbd' : options.linkColor;
-  const scheme = ownColors || !options.dark ? 'light' : 'dark';
+  const onWhite = ownColors && (!options.dark || options.lightPage === true);
+  if (ownColors && !onWhite) {
+    darkenMail(root, { text: options.textColor, background: options.backgroundColor });
+  }
+  const text = onWhite ? '#242424' : options.textColor;
+  const link = onWhite ? '#0f6cbd' : options.linkColor;
+  const scheme = onWhite || !options.dark ? 'light' : 'dark';
+
+  const mailBody = root.tagName === 'BODY' ? root : root.querySelector('body');
+  const styles = [...root.querySelectorAll('head style')].map((style) => style.outerHTML);
 
   const page = `<!doctype html>
 <html>
@@ -157,7 +203,7 @@ export function prepareMail(body: MessageBody, options: PrepareOptions): Prepare
 <base target="_blank">
 <style>
   html { color-scheme: ${scheme}; scrollbar-width: thin; padding: 12px 24px 24px;
-    background: ${ownColors ? '#ffffff' : 'transparent'}; }
+    background: ${onWhite ? '#ffffff' : 'transparent'}; }
   body { margin: 0; font: 14px/1.5 'Segoe UI', system-ui, sans-serif; color: ${text};
     overflow-wrap: anywhere; }
   a { color: ${link}; }
@@ -167,5 +213,5 @@ ${styles.join('\n')}
 ${mailBody?.outerHTML ?? '<body></body>'}
 </html>`;
 
-  return { page, remoteImages: [...blocked], usedContentIds: [...used] };
+  return { page, remoteImages: [...blocked], usedContentIds: [...used], ownColors };
 }

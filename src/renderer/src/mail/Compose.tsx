@@ -456,6 +456,7 @@ function Quote({ html, sourceId, dark }: { html: string; sourceId: number | null
           remoteImages: null,
           textColor: theme.colorNeutralForeground1,
           linkColor: theme.colorBrandForegroundLink,
+          backgroundColor: theme.colorNeutralBackground1,
           dark,
         },
       ),

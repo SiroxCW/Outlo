@@ -13,6 +13,7 @@ import {
   mergeClasses,
   Spinner,
   tokens,
+  Tooltip,
 } from '@fluentui/react-components';
 import {
   ArrowForwardRegular,
@@ -21,6 +22,8 @@ import {
   AttachRegular,
   OpenRegular,
   SaveRegular,
+  WeatherMoonRegular,
+  WeatherSunnyRegular,
 } from '@fluentui/react-icons';
 import { useMemo, useState } from 'react';
 import { MAX_IMAGE_URLS, type Attachment, type Message, type ResponseKind } from '@shared/api';
@@ -121,6 +124,8 @@ export function MessageCard({
   const [remoteImages, setRemoteImages] = useState<Record<string, string> | null>(null);
   const [fetching, setFetching] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  // In dark mode, the user can see a mail with colours of its own on white, as it was sent.
+  const [lightPage, setLightPage] = useState(false);
 
   const theme = dark ? darkTheme : lightTheme;
   const { body, inlineImages } = message;
@@ -135,11 +140,13 @@ export function MessageCard({
             remoteImages,
             textColor: theme.colorNeutralForeground1,
             linkColor: theme.colorBrandForegroundLink,
+            backgroundColor: theme.colorNeutralBackground1,
             dark,
+            lightPage,
           })
         : undefined,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [body?.contentType, body?.content, inlineKey, remoteImages, theme, dark],
+    [body?.contentType, body?.content, inlineKey, remoteImages, theme, dark, lightPage],
   );
 
   const senderName = message.from.name || message.from.address;
@@ -197,6 +204,18 @@ export function MessageCard({
             fold it. */}
         <div className={styles.side} onClick={(event) => event.stopPropagation()}>
           <div>
+            {dark && prepared?.ownColors && (
+              <Tooltip
+                content={t(lightPage ? 'reading.darkPage' : 'reading.lightPage')}
+                relationship="label"
+              >
+                <Button
+                  appearance="subtle"
+                  icon={lightPage ? <WeatherMoonRegular /> : <WeatherSunnyRegular />}
+                  onClick={() => setLightPage(!lightPage)}
+                />
+              </Tooltip>
+            )}
             <Button
               appearance="subtle"
               icon={<ArrowReplyRegular />}

@@ -194,6 +194,8 @@ export const en = {
   'reading.retry': 'Try again',
   'reading.picturesBlocked': 'Pictures from the internet were not loaded, to protect your privacy.',
   'reading.showPictures': 'Show pictures',
+  'reading.lightPage': 'Show with a light background',
+  'reading.darkPage': 'Show with a dark background',
   'attachment.open': 'Open',
   'attachment.save': 'Save as',
   'attachment.blocked':

@@ -57,6 +57,8 @@ describe('quotes', () => {
     expect(quote).toMatch(/<b>Sent:<\/b> \w+day, November 27, 2026 \d+:30 [AP]M/);
     expect(quote).toContain('<b>Subject:</b> &lt;b&gt;Plans&lt;/b&gt;');
     expect(quote).toContain('<div>Line one<br>Line &lt;two&gt;</div>');
+    // Nothing that would make the app show it as mail with colours of its own.
+    expect(quote).not.toMatch(/color|bgcolor|background|<style/i);
   });
 
   it('keeps the body of an HTML mail with its styles, and falls back to the preview', () => {

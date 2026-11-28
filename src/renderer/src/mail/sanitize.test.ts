@@ -7,6 +7,7 @@ const OPTIONS: PrepareOptions = {
   remoteImages: null,
   textColor: '#eeeeee',
   linkColor: '#99ccff',
+  backgroundColor: '#292929',
   dark: true,
 };
 const PIXEL = 'data:image/png;base64,iVBORw0KGgo=';
@@ -99,6 +100,7 @@ describe('prepareMail with ordinary mail', () => {
       '<html><head><style>.big { font-size: 20px }</style></head><body bgcolor="#eee">' +
         '<h1 class="big">Hi</h1><table width="600"><tr><td style="color: red"><b>Bold</b></td></tr></table>' +
         '</body></html>',
+      { dark: false },
     );
     expect(document.head.innerHTML).toContain('.big { font-size: 20px }');
     expect(body.getAttribute('bgcolor')).toBe('#eee');
@@ -174,12 +176,35 @@ describe('prepareMail with ordinary mail', () => {
     expect(body.querySelector('img')?.getAttribute('src')).toBe(PIXEL);
   });
 
-  it('shows mail with its own colours on white, and plain mail in the colours of the app', () => {
-    const designed = prepare('<div style="background:#003366;color:#fff">Newsletter</div>');
-    expect(designed.page).toContain('background: #ffffff');
-    expect(designed.page).toContain('color-scheme: light');
+  it('changes mail with its own colours for dark mode, unless it is asked for on white', () => {
+    const mail =
+      '<html><head><style>p { color: black }</style></head><body bgcolor="#ffffff">' +
+      '<div style="background:#003366;color:#fff">Newsletter</div><font color="#000000">Hi</font>' +
+      '</body></html>';
+    const dark = prepare(mail);
+    expect(dark.ownColors).toBe(true);
+    expect(dark.page).toContain('background: transparent');
+    expect(dark.page).toContain('color-scheme: dark');
+    expect(dark.document.head.innerHTML).toContain('p { color: #eeeeee }');
+    expect(dark.body.getAttribute('bgcolor')).toBe('#292929');
+    expect(dark.body.querySelector('font')?.getAttribute('color')).toBe('#eeeeee');
+    // A dark banner with white letters already suits a dark page.
+    expect(dark.body.querySelector('div')?.getAttribute('style')).toBe(
+      'background:#003366;color:#fff',
+    );
 
+    for (const options of [{ lightPage: true }, { dark: false }]) {
+      const white = prepare(mail, options);
+      expect(white.page).toContain('background: #ffffff');
+      expect(white.page).toContain('color-scheme: light');
+      expect(white.document.head.innerHTML).toContain('p { color: black }');
+      expect(white.body.getAttribute('bgcolor')).toBe('#ffffff');
+    }
+  });
+
+  it('shows plain mail in the colours of the app', () => {
     const simple = prepare('<div>Hello<br>there</div>');
+    expect(simple.ownColors).toBe(false);
     expect(simple.page).toContain('background: transparent');
     expect(simple.page).toContain('color: #eeeeee');
     expect(simple.page).toContain('color-scheme: dark');
