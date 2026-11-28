@@ -10,14 +10,21 @@ export function useSettings(): Settings | undefined {
   const [values, setValues] = useState<Record<string, string>>();
 
   useEffect(() => {
-    void window.outlo.request('settings.get', undefined).then(setValues);
+    let active = true;
+    void window.outlo.request('settings.get', undefined).then((loaded) => {
+      if (active) setValues(loaded);
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const set = useCallback((key: string, value: string) => {
-    setValues((current) => ({ ...current, [key]: value }));
-    void window.outlo.request('settings.set', { key: `ui.${key}`, value });
+    const stored = `ui.${key}`;
+    setValues((current) => ({ ...current, [stored]: value }));
+    void window.outlo.request('settings.set', { key: stored, value });
   }, []);
 
   if (!values) return undefined;
-  return { get: (key, fallback) => values[`ui.${key}`] ?? values[key] ?? fallback, set };
+  return { get: (key, fallback) => values[`ui.${key}`] ?? fallback, set };
 }
