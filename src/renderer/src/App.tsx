@@ -10,8 +10,10 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Account,
+  FolderRole,
   ListFilter,
   MessageFilter,
+  MoveRole,
   SessionInfo,
   TitleBarStyle,
   WebModule,
@@ -93,7 +95,9 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const [chosenFolderId, setChosenFolderId] = useState<number>();
   const [inboxFilter, setInboxFilter] = useState<MessageFilter>('focused');
   const [show, setShow] = useState<ListFilter>('all');
-  const [selectedId, setSelectedId] = useState<number>();
+  // The open message. Child: picked below its conversation, where it stands for itself only.
+  const [selection, setSelection] = useState<{ id: number; child: boolean }>();
+  const selectedId = selection?.id;
   const [search, setSearch] = useState('');
   const [foldersVisible, setFoldersVisible] = useState(true);
   // False: closed. True: add an account. An account: sign it in fully, to replace its web mode.
@@ -155,6 +159,49 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   }, [message, selectedId]);
 
   const searching = search.trim() !== '';
+
+  // What an action is for. In conversation view the row of a conversation stands for all its
+  // messages in the folder, as in Outlook.
+  const targets = async (): Promise<number[]> => {
+    if (!message) return [];
+    if (!conversations || selection?.child || searching || !folder || message.threadId === null) {
+      return [message.id];
+    }
+    const all = await window.outlo
+      .request('conversations.get', { messageId: message.id, folderId: folder.id })
+      .catch(() => []);
+    const ids = all.filter((entry) => entry.folderId === folder.id).map((entry) => entry.id);
+    return ids.includes(message.id) ? ids : [message.id];
+  };
+
+  // Moves what the action is for. Then the next row of the list opens, as in Outlook.
+  const moveAway = async (to: { folderId: number } | { role: MoveRole }) => {
+    if (!message) return;
+    const ids = await targets();
+    if (!searching && source) {
+      const offset =
+        source.offsetOf(message.id, true) ??
+        (message.threadId === null ? undefined : source.offsetOfThread(message.threadId, true));
+      // Asking the list for a row loads its page, so only rows that exist are asked for.
+      const next = [0, 1, -1]
+        .map((step) => (offset === undefined ? -1 : offset + step))
+        .filter((entry) => entry >= 0 && entry < (state?.total ?? 0))
+        .map((entry) => source.get(entry))
+        .find((entry) => entry && !ids.includes(entry.id));
+      setSelection(next && { id: next.id, child: false });
+    }
+    if ('folderId' in to)
+      await window.outlo.request('messages.move', { ids, folderId: to.folderId });
+    else await window.outlo.request('messages.moveToRole', { ids, role: to.role });
+  };
+  const accountFolders = folders.filter((entry) => entry.accountId === message?.accountId);
+  const roleOfMessage = folders.find((entry) => entry.id === message?.folderId)?.role;
+  // A folder with that role exists for the message, and it is not in there already.
+  const canMoveTo = (role: FolderRole) =>
+    message != null &&
+    roleOfMessage !== role &&
+    accountFolders.some((entry) => entry.role === role);
+
   // An account in web mode is shown when the user picked it, or when there is no mail to show.
   const webAccounts = mailboxes?.accounts.filter((entry) => entry.provider === 'web') ?? [];
   // Right after an account was added, the list of accounts does not contain it yet. Showing
@@ -218,6 +265,26 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                   message &&
                   void window.outlo.request('messages.setFlagged', { ids: [message.id], isFlagged })
                 }
+                // Deleting in Deleted Items would delete for good, which is not offered yet.
+                onDelete={
+                  canMoveTo('deleted') ? () => void moveAway({ role: 'deleted' }) : undefined
+                }
+                onArchive={
+                  canMoveTo('archive') ? () => void moveAway({ role: 'archive' }) : undefined
+                }
+                junk={
+                  roleOfMessage === 'junk'
+                    ? canMoveTo('inbox') && {
+                        notJunk: true,
+                        onClick: () => void moveAway({ role: 'inbox' }),
+                      }
+                    : canMoveTo('junk') && {
+                        notJunk: false,
+                        onClick: () => void moveAway({ role: 'junk' }),
+                      }
+                }
+                folders={message ? accountFolders : []}
+                onMove={(folderId) => void moveAway({ folderId })}
                 onTheme={(choice) => settings.set('theme', choice)}
                 onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
                 demo={session.demo}
@@ -262,7 +329,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                         onSelect={(folderId) => {
                           setChosenWebAccountId(undefined);
                           setChosenFolderId(folderId);
-                          setSelectedId(undefined);
+                          setSelection(undefined);
                           setShow('all');
                           setSearch('');
                         }}
@@ -300,7 +367,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                         <SearchResults
                           query={search}
                           selectedId={selectedId}
-                          onSelect={(selected) => setSelectedId(selected.id)}
+                          onSelect={(selected) => setSelection({ id: selected.id, child: false })}
                         />
                       ) : (
                         <MessageList
@@ -311,9 +378,15 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                           source={source}
                           state={state}
                           selectedId={selectedId}
+                          selectedChild={selection?.child === true}
                           onFilter={setInboxFilter}
                           onView={changeView}
-                          onSelect={(selected) => setSelectedId(selected.id)}
+                          onSelect={(selected, child) => setSelection({ id: selected.id, child })}
+                          onDelete={
+                            canMoveTo('deleted')
+                              ? () => void moveAway({ role: 'deleted' })
+                              : undefined
+                          }
                         />
                       )}
                     </div>

@@ -32,9 +32,17 @@ const IMPORTANCE: Importance[] = ['low', 'normal', 'high'];
 // Picture types that are shown inside the text of a message. No SVG: it can carry scripts.
 export const INLINE_IMAGE_TYPES = /^image\/(png|jpeg|gif|webp|bmp)$/i;
 
-// Changes the user can make to a message, and the column each one sets.
-export type OperationKind = 'read' | 'flag';
-const CHANGE_COLUMNS: Record<OperationKind, string> = { read: 'is_read', flag: 'is_flagged' };
+// Changes the user can make to a message. Read and flag set a column, a move sets the folder.
+export type OperationKind = 'read' | 'flag' | 'move';
+type FieldKind = 'read' | 'flag';
+const CHANGE_COLUMNS: Record<FieldKind, string> = { read: 'is_read', flag: 'is_flagged' };
+// True or false for read and flag, the provider's ID of a folder for a move.
+export type OperationValue = boolean | string;
+interface WaitingChange {
+  value: OperationValue;
+  before: OperationValue;
+}
+type WaitingChanges = Partial<Record<OperationKind, WaitingChange>>;
 
 const SUMMARY_COLUMNS = `
   m.id, m.account_id, m.folder_id, m.thread_id, m.subject, m.preview, m.from_name,
@@ -107,9 +115,9 @@ export interface Operation {
   remoteId: string | null;
   // As stored, so a newer change that came in while this one was on its way can be told apart.
   data: string;
-  value: boolean;
+  value: OperationValue;
   // What the provider had before, which comes back here when it refuses the change.
-  before: boolean;
+  before: OperationValue;
   attempts: number;
 }
 
@@ -167,14 +175,16 @@ function toSummary(row: Row): MessageSummary {
 
 function toOperation(row: Row): Operation {
   const data = JSON.parse(row.data as string) as { value?: unknown; before?: unknown };
+  const known = (entry: unknown): OperationValue =>
+    typeof entry === 'boolean' || typeof entry === 'string' ? entry : false;
   return {
     id: row.id as number,
     accountId: row.account_id as number,
     kind: row.kind as string,
     remoteId: row.remote_id as string | null,
     data: row.data as string,
-    value: data.value === true,
-    before: data.before === true,
+    value: known(data.value),
+    before: known(data.before),
     attempts: row.attempts as number,
   };
 }
@@ -279,6 +289,8 @@ function groupValue(field: SortField, value: unknown): string {
 // All reads and writes of mail data go through this class. Statements are prepared once.
 export class MailStore {
   private readonly statements = new Map<string, StatementSync>();
+  // Changes on their way to the provider right now.
+  private readonly sending = new Set<number>();
 
   constructor(private readonly db: Database) {}
 
@@ -583,7 +595,7 @@ export class MailStore {
 
   // Changes messages here at once. For mail of a provider the change also waits in the queue
   // until it was sent there.
-  private change(kind: OperationKind, ids: number[], value: boolean, now: number): number[] {
+  private change(kind: FieldKind, ids: number[], value: boolean, now: number): number[] {
     const column = CHANGE_COLUMNS[kind];
     const update = this.sql(
       `UPDATE messages SET ${column} = ?1 WHERE id = ?2 AND ${column} <> ?1
@@ -597,47 +609,102 @@ export class MailStore {
         const folderId = row.folder_id as number;
         changes.set(folderId, (changes.get(folderId) ?? 0) + 1);
         if (row.remote_id !== null) {
-          this.queue(row.account_id as number, kind, row.remote_id as string, value, now);
+          this.queue(row.account_id as number, kind, row.remote_id as string, value, !value, now);
         }
       }
       if (kind === 'read') {
-        for (const [folderId, count] of changes) this.addUnread(folderId, value ? -count : count);
+        for (const [folderId, count] of changes)
+          this.addCounts(folderId, 0, value ? -count : count);
       }
       return [...changes.keys()];
     });
   }
 
-  private addUnread(folderId: number, delta: number): void {
-    this.sql('UPDATE folders SET unread_count = max(unread_count + ?, 0) WHERE id = ?').run(
-      delta,
-      folderId,
+  // Moves messages to a folder of their own account.
+  moveMessages(ids: number[], folderId: number, now = Date.now()): number[] {
+    const target = this.sql('SELECT * FROM folders WHERE id = ?').get(folderId);
+    return target ? this.move(ids, () => target, now) : [];
+  }
+
+  // Moves messages to the folder with this role in their account, like Deleted Items.
+  moveToRole(ids: number[], role: FolderRole, now = Date.now()): number[] {
+    const find = this.sql('SELECT * FROM folders WHERE account_id = ? AND role = ?');
+    return this.move(ids, (accountId) => find.get(accountId, role), now);
+  }
+
+  private move(ids: number[], target: (accountId: number) => Row | undefined, now: number) {
+    const find = this.sql(
+      `SELECT m.account_id, m.folder_id, m.remote_id, m.is_read, f.remote_id AS folder_remote_id
+       FROM messages m JOIN folders f ON f.id = m.folder_id WHERE m.id = ?`,
     );
+    // The round of its new folder, so a round that runs there does not take it for gone.
+    const update = this.sql('UPDATE messages SET folder_id = ?, sync_round = ? WHERE id = ?');
+    return this.transaction(() => {
+      const changed = new Set<number>();
+      for (const id of ids) {
+        const message = find.get(id);
+        if (!message) continue;
+        const accountId = message.account_id as number;
+        const from = message.folder_id as number;
+        const to = target(accountId);
+        if (!to || to.account_id !== accountId || to.id === from) continue;
+        // Mail of a provider can only go to a folder the provider knows.
+        const remoteId = message.remote_id as string | null;
+        if (remoteId !== null && (to.remote_id === null || message.folder_remote_id === null)) {
+          continue;
+        }
+        update.run(to.id as number, to.sync_round as number, id);
+        const unread = message.is_read ? 0 : 1;
+        this.addCounts(from, -1, -unread);
+        this.addCounts(to.id as number, 1, unread);
+        changed.add(from).add(to.id as number);
+        if (remoteId !== null) {
+          const before = message.folder_remote_id as string;
+          this.queue(accountId, 'move', remoteId, to.remote_id as string, before, now);
+        }
+      }
+      return [...changed];
+    });
+  }
+
+  private addCounts(folderId: number, total: number, unread: number): void {
+    this.sql(
+      `UPDATE folders SET total_count = max(total_count + ?, 0),
+         unread_count = max(unread_count + ?, 0) WHERE id = ?`,
+    ).run(total, unread, folderId);
   }
 
   // One waiting change per message and kind. A newer one takes the place of the one before and
-  // keeps what the provider had before both.
+  // keeps what the provider had before both. When it brings back just that, nothing is left to
+  // send, unless the one before is on its way.
   private queue(
     accountId: number,
     kind: OperationKind,
     remoteId: string,
-    value: boolean,
+    value: OperationValue,
+    before: OperationValue,
     now: number,
   ): void {
     const waiting = this.sql(
-      'SELECT data FROM operations WHERE account_id = ? AND remote_id = ? AND kind = ?',
+      'SELECT id, data FROM operations WHERE account_id = ? AND remote_id = ? AND kind = ?',
     ).get(accountId, remoteId, kind);
-    if (waiting) {
-      const { before } = JSON.parse(waiting.data as string) as { before: boolean };
+    if (!waiting) {
       this.sql(
-        `UPDATE operations SET data = ?, next_attempt_at = 0
-         WHERE account_id = ? AND remote_id = ? AND kind = ?`,
-      ).run(JSON.stringify({ value, before }), accountId, remoteId, kind);
+        `INSERT INTO operations (account_id, kind, remote_id, data, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(accountId, kind, remoteId, JSON.stringify({ value, before }), now);
       return;
     }
-    this.sql(
-      `INSERT INTO operations (account_id, kind, remote_id, data, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(accountId, kind, remoteId, JSON.stringify({ value, before: !value }), now);
+    const id = waiting.id as number;
+    const earlier = (JSON.parse(waiting.data as string) as { before: OperationValue }).before;
+    if (earlier === value && !this.sending.has(id)) {
+      this.sql('DELETE FROM operations WHERE id = ?').run(id);
+      return;
+    }
+    this.sql('UPDATE operations SET data = ?, next_attempt_at = 0 WHERE id = ?').run(
+      JSON.stringify({ value, before: earlier }),
+      id,
+    );
   }
 
   // The queue of changes for the provider.
@@ -666,6 +733,14 @@ export class MailStore {
     return (row?.next as number | null) ?? null;
   }
 
+  // While a change is on its way, a newer one must not cancel it here.
+  markSending(operations: Operation[], sending: boolean): void {
+    for (const operation of operations) {
+      if (sending) this.sending.add(operation.id);
+      else this.sending.delete(operation.id);
+    }
+  }
+
   // The provider took the change. A newer one that came in meanwhile stays, and what the
   // provider has before it is now the value that was sent.
   finishOperation(operation: Operation): void {
@@ -675,7 +750,7 @@ export class MailStore {
       this.sql('DELETE FROM operations WHERE id = ?').run(operation.id);
       return;
     }
-    const { value } = JSON.parse(current.data as string) as { value: boolean };
+    const { value } = JSON.parse(current.data as string) as { value: OperationValue };
     this.sql('UPDATE operations SET data = ? WHERE id = ?').run(
       JSON.stringify({ value, before: operation.value }),
       operation.id,
@@ -689,7 +764,7 @@ export class MailStore {
     );
   }
 
-  // For a change that cannot be sent, as when its message is gone at the provider.
+  // For a change that cannot be sent, like one of a kind this version does not know.
   dropOperation(operation: Operation): void {
     this.sql('DELETE FROM operations WHERE id = ?').run(operation.id);
   }
@@ -699,33 +774,104 @@ export class MailStore {
   undoOperation(operation: Operation): number[] {
     return this.transaction(() => {
       this.dropOperation(operation);
-      const column = CHANGE_COLUMNS[operation.kind as OperationKind];
-      if (!column || operation.remoteId === null) return [];
+      const { accountId, remoteId, kind, before } = operation;
+      if (remoteId === null) return [];
+      if (kind === 'move') {
+        return typeof before === 'string' ? this.moveBack(accountId, remoteId, before) : [];
+      }
+      if (kind !== 'read' && kind !== 'flag') return [];
+      const column = CHANGE_COLUMNS[kind];
       const row = this.sql(
         `UPDATE messages SET ${column} = ?1 WHERE account_id = ?2 AND remote_id = ?3
            AND ${column} <> ?1 RETURNING folder_id`,
-      ).get(operation.before ? 1 : 0, operation.accountId, operation.remoteId);
+      ).get(before === true ? 1 : 0, accountId, remoteId);
       if (!row) return [];
       const folderId = row.folder_id as number;
-      if (operation.kind === 'read') this.addUnread(folderId, operation.before ? -1 : 1);
+      if (kind === 'read') this.addCounts(folderId, 0, before === true ? -1 : 1);
       return [folderId];
     });
   }
 
-  // The values of changes that wait for the provider, by message. The provider does not know
-  // them yet, so what it reports in the meantime must not overwrite them.
-  private waitingValues(accountId: number): Map<string, Partial<Record<OperationKind, boolean>>> {
-    const values = new Map<string, Partial<Record<OperationKind, boolean>>>();
+  private moveBack(accountId: number, remoteId: string, folderRemoteId: string): number[] {
+    const back = this.sql('SELECT * FROM folders WHERE account_id = ? AND remote_id = ?').get(
+      accountId,
+      folderRemoteId,
+    );
+    const message = this.sql(
+      'SELECT id, folder_id, is_read FROM messages WHERE account_id = ? AND remote_id = ?',
+    ).get(accountId, remoteId);
+    if (!back || !message || message.folder_id === back.id) return [];
+    this.sql('UPDATE messages SET folder_id = ?, sync_round = ? WHERE id = ?').run(
+      back.id as number,
+      back.sync_round as number,
+      message.id as number,
+    );
+    const unread = message.is_read ? 0 : 1;
+    this.addCounts(message.folder_id as number, -1, -unread);
+    this.addCounts(back.id as number, 1, unread);
+    return [message.folder_id as number, back.id as number];
+  }
+
+  // The provider gave a message a new ID, which only happens when it leaves the mailbox.
+  replaceRemoteId(accountId: number, from: string, to: string): void {
+    this.transaction(() => {
+      for (const table of ['messages', 'operations']) {
+        this.sql(`UPDATE ${table} SET remote_id = ? WHERE account_id = ? AND remote_id = ?`).run(
+          to,
+          accountId,
+          from,
+        );
+      }
+    });
+  }
+
+  // Reads a folder from the start again, when it is not certain what the provider has there.
+  restartFolderSync(accountId: number, folderRemoteId: string): void {
+    this.sql(
+      'UPDATE folders SET sync_link = NULL, sync_pending = 1 WHERE account_id = ? AND remote_id = ?',
+    ).run(accountId, folderRemoteId);
+  }
+
+  // The changes that wait for the provider, by message.
+  private waitingChanges(accountId: number): Map<string, WaitingChanges> {
+    const changes = new Map<string, WaitingChanges>();
     const rows = this.sql(
       `SELECT remote_id, kind, data FROM operations
-       WHERE account_id = ? AND remote_id IS NOT NULL AND kind IN ('read', 'flag')`,
+       WHERE account_id = ? AND remote_id IS NOT NULL AND kind IN ('read', 'flag', 'move')`,
     ).all(accountId);
     for (const row of rows) {
       const remoteId = row.remote_id as string;
-      const { value } = JSON.parse(row.data as string) as { value: boolean };
-      values.set(remoteId, { ...values.get(remoteId), [row.kind as OperationKind]: value });
+      const data = JSON.parse(row.data as string) as WaitingChange;
+      changes.set(remoteId, { ...changes.get(remoteId), [row.kind as OperationKind]: data });
     }
-    return values;
+    return changes;
+  }
+
+  // How the counters of the provider differ from here while changes wait for it, by folder.
+  private waitingCounts(accountId: number): Map<number, { total: number; unread: number }> {
+    const counts = new Map<number, { total: number; unread: number }>();
+    const add = (folderId: number, total: number, unread: number) => {
+      const entry = counts.get(folderId) ?? { total: 0, unread: 0 };
+      counts.set(folderId, { total: entry.total + total, unread: entry.unread + unread });
+    };
+    const find = this.sql(
+      'SELECT folder_id, is_read FROM messages WHERE account_id = ? AND remote_id = ?',
+    );
+    const folder = this.sql('SELECT id FROM folders WHERE account_id = ? AND remote_id = ?');
+    for (const [remoteId, waiting] of this.waitingChanges(accountId)) {
+      if (!waiting.read && !waiting.move) continue;
+      const here = find.get(accountId, remoteId);
+      if (!here) continue;
+      // Where the provider still has the message, and whether it counts it as unread there.
+      const there = waiting.move
+        ? (folder.get(accountId, String(waiting.move.before))?.id as number | undefined)
+        : (here.folder_id as number);
+      if (there === undefined) continue;
+      const unreadThere = waiting.read ? waiting.read.before !== true : !here.is_read;
+      add(here.folder_id as number, 1, here.is_read ? 0 : 1);
+      add(there, -1, unreadThere ? -1 : 0);
+    }
+    return counts;
   }
 
   setSetting(key: string, value: string): void {
@@ -888,20 +1034,7 @@ export class MailStore {
       ).all(accountId);
       for (const row of rows) known.set(row.remote_id as string, row);
       let changed = false;
-      // The counters of the provider do not know yet what was read or marked unread here.
-      const waiting = new Map(
-        this.sql(
-          `SELECT m.folder_id,
-             sum(CASE WHEN json_extract(o.data, '$.value') THEN -1 ELSE 1 END) AS delta
-           FROM operations o
-           JOIN messages m ON m.account_id = o.account_id AND m.remote_id = o.remote_id
-           WHERE o.account_id = ? AND o.kind = 'read'
-             AND json_extract(o.data, '$.value') <> json_extract(o.data, '$.before')
-           GROUP BY m.folder_id`,
-        )
-          .all(accountId)
-          .map((row) => [row.folder_id as number, row.delta as number]),
-      );
+      const waiting = this.waitingCounts(accountId);
 
       // New folders first, so every parent exists before a folder points to it.
       const ids = new Map<string, number>();
@@ -925,7 +1058,9 @@ export class MailStore {
       for (const folder of folders) {
         const parentId = folder.parentRemoteId ? (ids.get(folder.parentRemoteId) ?? null) : null;
         const id = ids.get(folder.remoteId)!;
-        const unread = Math.max(folder.unreadCount + (waiting.get(id) ?? 0), 0);
+        // The counters of the provider do not know yet what waits to be sent there.
+        const total = Math.max(folder.totalCount + (waiting.get(id)?.total ?? 0), 0);
+        const unread = Math.max(folder.unreadCount + (waiting.get(id)?.unread ?? 0), 0);
         const row = known.get(folder.remoteId);
         const same =
           row &&
@@ -933,18 +1068,10 @@ export class MailStore {
           row.name === folder.name &&
           row.role === folder.role &&
           row.sort_order === folder.sortOrder &&
-          row.total_count === folder.totalCount &&
+          row.total_count === total &&
           row.unread_count === unread;
         if (same) continue;
-        update.run(
-          parentId,
-          folder.name,
-          folder.role,
-          folder.sortOrder,
-          folder.totalCount,
-          unread,
-          id,
-        );
+        update.run(parentId, folder.name, folder.role, folder.sortOrder, total, unread, id);
         changed = true;
       }
 
@@ -975,11 +1102,13 @@ export class MailStore {
   }
 
   // Removes what a round from the start did not meet: it is no longer in the folder.
+  // A message moved here whose move the provider does not have yet is not gone.
   finishFolderRound(folderId: number, round: number): number {
-    const result = this.sql('DELETE FROM messages WHERE folder_id = ? AND sync_round < ?').run(
-      folderId,
-      round,
-    );
+    const result = this.sql(
+      `DELETE FROM messages WHERE folder_id = ? AND sync_round < ?
+         AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.account_id = messages.account_id
+           AND o.remote_id = messages.remote_id AND o.kind = 'move')`,
+    ).run(folderId, round);
     return Number(result.changes);
   }
 
@@ -1027,16 +1156,19 @@ export class MailStore {
 
     return this.transaction(() => {
       const changed = new Set<number>();
-      const waiting = this.waitingValues(accountId);
+      const waiting = this.waitingChanges(accountId);
       for (const { remoteId, fields: reported } of messages) {
+        // What the provider reports before it has the changes made here must not undo them. A
+        // message on its way to another folder is left alone.
         const own = waiting.get(remoteId);
-        const fields = own
-          ? {
-              ...reported,
-              isRead: own.read ?? reported.isRead,
-              isFlagged: own.flag ?? reported.isFlagged,
-            }
-          : reported;
+        if (own?.move) continue;
+        const read = own?.read?.value;
+        const flagged = own?.flag?.value;
+        const fields = {
+          ...reported,
+          isRead: typeof read === 'boolean' ? read : reported.isRead,
+          isFlagged: typeof flagged === 'boolean' ? flagged : reported.isFlagged,
+        };
         const threadId = fields.conversationId
           ? (thread.get(accountId, fields.conversationId)!.id as number)
           : null;

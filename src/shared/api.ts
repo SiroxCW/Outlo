@@ -17,6 +17,8 @@ export interface Account {
 }
 
 export type FolderRole = 'inbox' | 'drafts' | 'sent' | 'deleted' | 'junk' | 'archive' | 'outbox';
+// The standard folders that messages can be sent to with one action.
+export type MoveRole = 'inbox' | 'deleted' | 'archive' | 'junk';
 
 export interface Folder {
   id: number;
@@ -191,6 +193,11 @@ export type CoreRequests = {
 
   'messages.setRead': { params: { ids: number[]; isRead: boolean }; result: undefined };
   'messages.setFlagged': { params: { ids: number[]; isFlagged: boolean }; result: undefined };
+  // Moves messages to a folder of their own account.
+  'messages.move': { params: { ids: number[]; folderId: number }; result: undefined };
+  // Moves messages to the folder with this role in their account: delete, archive, junk and
+  // not junk. Messages already there stay.
+  'messages.moveToRole': { params: { ids: number[]; role: MoveRole }; result: undefined };
 
   'sync.status': { params: undefined; result: AccountSyncStatus[] };
   // Checks all accounts for news right away.

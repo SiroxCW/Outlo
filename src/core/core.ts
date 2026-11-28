@@ -10,6 +10,7 @@ import {
   type ListFilter,
   type ListOptions,
   type MessageFilter,
+  type MoveRole,
   type SortField,
 } from '@shared/api';
 import { createLog } from '@shared/log';
@@ -27,6 +28,7 @@ import * as check from './validate';
 const FILTERS: readonly MessageFilter[] = ['all', 'focused', 'other'];
 const LIST_FILTERS: readonly ListFilter[] = ['all', 'unread', 'flagged', 'toMe', 'hasFiles'];
 const SORT_FIELDS: readonly SortField[] = ['date', 'from', 'subject', 'importance', 'flag'];
+const MOVE_ROLES: readonly MoveRole[] = ['inbox', 'deleted', 'archive', 'junk'];
 const MAX_IDS_PER_COMMAND = 10_000;
 const DEMO_SEEDED = 'demo.seeded';
 const UI_SETTINGS = 'ui.';
@@ -183,6 +185,28 @@ export function createCore(options: CoreOptions) {
           check.boolean(input.isFlagged, 'isFlagged'),
         );
         announce(folderIds, false);
+        engine?.sendChanges();
+        return undefined;
+      },
+
+      'messages.move': (params) => {
+        const input = check.record(params, 'params');
+        const folderIds = store.moveMessages(
+          check.idList(input.ids, 'ids', MAX_IDS_PER_COMMAND),
+          check.id(input.folderId, 'folderId'),
+        );
+        announce(folderIds, true);
+        engine?.sendChanges();
+        return undefined;
+      },
+
+      'messages.moveToRole': (params) => {
+        const input = check.record(params, 'params');
+        const folderIds = store.moveToRole(
+          check.idList(input.ids, 'ids', MAX_IDS_PER_COMMAND),
+          check.oneOf(input.role, 'role', MOVE_ROLES),
+        );
+        announce(folderIds, true);
         engine?.sendChanges();
         return undefined;
       },

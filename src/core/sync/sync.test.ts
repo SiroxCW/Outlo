@@ -410,7 +410,7 @@ describe('changes made here', () => {
   const patches = () => graph.requests.filter((request) => request.startsWith('PATCH '));
   const refuse = (status: number, code = 'Test') => {
     graph.intercept = (_url, method) =>
-      method === 'PATCH'
+      method !== 'GET'
         ? new Response(JSON.stringify({ error: { code, message: 'No' } }), { status })
         : undefined;
   };
@@ -581,6 +581,166 @@ describe('changes made here', () => {
     expect(graph.find(id)!.isRead).toBe(false);
     expect(store.getMessage(message)!.isRead).toBe(false);
     expect(store.hasOperations(accountId)).toBe(false);
+  });
+});
+
+describe('moves made here', () => {
+  const stored = (name: string) => store.listMessages(folder(name).id, 'all', 0, 500).messages;
+  const idOf = (name: string, subject: string) =>
+    stored(name).find((message) => message.subject === subject)!.id;
+  const moves = () => graph.requests.filter((request) => request.endsWith('/move'));
+  const counts = (name: string) => {
+    const { totalCount, unreadCount } = folder(name);
+    return [totalCount, unreadCount];
+  };
+  const refuseMoves = (status: number) => {
+    graph.intercept = (_url, method) =>
+      method === 'POST' && _url.pathname.endsWith('/move')
+        ? new Response(JSON.stringify({ error: { code: 'Test', message: 'No' } }), { status })
+        : undefined;
+  };
+
+  it('moves messages to another folder, and the server then reports them there', async () => {
+    const ids = [
+      graph.addMessage(inbox, { subject: 'One' }),
+      graph.addMessage(inbox, { subject: 'Two', isRead: true }),
+    ];
+    graph.addMessage(inbox, { subject: 'Stays' });
+    const sync = createSync();
+    await settle(sync);
+
+    const changed = store.moveMessages(
+      [idOf('Posteingang', 'One'), idOf('Posteingang', 'Two')],
+      folder('Projects').id,
+    );
+    expect(changed.sort()).toEqual([folder('Posteingang').id, folder('Projects').id].sort());
+    expect(counts('Posteingang')).toEqual([1, 1]);
+    expect(counts('Projects')).toEqual([2, 1]);
+    await settle(sync);
+
+    expect(moves()).toHaveLength(2);
+    expect(ids.every((id) => graph.find(id) !== undefined)).toBe(true);
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Posteingang')).toEqual(['Stays']);
+    expect(subjects('Projects').sort()).toEqual(['One', 'Two']);
+    expect(counts('Projects')).toEqual([2, 1]);
+    expect(store.hasOperations(accountId)).toBe(false);
+  });
+
+  it('keeps a moved message in its new folder while the server still has it in the old one', async () => {
+    graph.addMessage(inbox, { subject: 'Moving' });
+    graph.addMessage(inbox, { subject: 'Stays' });
+    const sync = createSync();
+    await settle(sync);
+
+    refuseMoves(503);
+    store.moveMessages([idOf('Posteingang', 'Moving')], folder('Projects').id);
+    await sync.stepSafely();
+    expect(store.hasOperations(accountId)).toBe(true);
+
+    // Both folders are read from the start, and the folder list brings the server's counters.
+    graph.expireSyncState();
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Posteingang')).toEqual(['Stays']);
+    expect(subjects('Projects')).toEqual(['Moving']);
+    expect(counts('Posteingang')).toEqual([1, 1]);
+    expect(counts('Projects')).toEqual([1, 1]);
+
+    graph.intercept = undefined;
+    now += MINUTE;
+    await settle(sync);
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(moves().length).toBeGreaterThan(1);
+    expect(subjects('Posteingang')).toEqual(['Stays']);
+    expect(subjects('Projects')).toEqual(['Moving']);
+    expect(store.hasOperations(accountId)).toBe(false);
+  });
+
+  it('moves a message back when the server refuses', async () => {
+    graph.addMessage(inbox, { subject: 'Refused' });
+    const sync = createSync();
+    await settle(sync);
+
+    refuseMoves(403);
+    store.moveMessages([idOf('Posteingang', 'Refused')], folder('Projects').id);
+    events = [];
+    await sync.stepSafely();
+    expect(subjects('Posteingang')).toEqual(['Refused']);
+    expect(subjects('Projects')).toEqual([]);
+    expect(counts('Posteingang')).toEqual([1, 1]);
+    expect(counts('Projects')).toEqual([0, 0]);
+    expect(events).toContain('folders');
+  });
+
+  it('sends nothing when a message is moved back before the first move was sent', async () => {
+    graph.addMessage(inbox, { subject: 'Back' });
+    const sync = createSync();
+    await settle(sync);
+
+    graph.offline = true;
+    const message = idOf('Posteingang', 'Back');
+    store.moveMessages([message], folder('Projects').id);
+    store.moveMessages([message], folder('Posteingang').id);
+    expect(store.hasOperations(accountId)).toBe(false);
+    graph.offline = false;
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(moves()).toEqual([]);
+    expect(subjects('Posteingang')).toEqual(['Back']);
+  });
+
+  it('moves a message back and reads its folder again when the new folder is gone', async () => {
+    const id = graph.addMessage(inbox, { subject: 'Lost' });
+    const sync = createSync();
+    await settle(sync);
+
+    graph.removeFolder(projects);
+    store.moveMessages([idOf('Posteingang', 'Lost')], folder('Projects').id);
+    await sync.stepSafely();
+    expect(subjects('Posteingang')).toEqual(['Lost']);
+    expect(
+      store.listSyncFolders(accountId).find((entry) => entry.remoteId === inbox)!.syncPending,
+    ).toBe(1);
+    await settle(sync);
+    expect(subjects('Posteingang')).toEqual(['Lost']);
+    expect(graph.find(id)).toBeDefined();
+  });
+
+  it('follows a message that gets a new ID when it moves', async () => {
+    graph.newIdOnMove = true;
+    graph.addMessage(inbox, { subject: 'Renamed' });
+    const sync = createSync();
+    await settle(sync);
+
+    store.moveMessages([idOf('Posteingang', 'Renamed')], folder('Projects').id);
+    await settle(sync);
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Projects')).toEqual(['Renamed']);
+    expect(subjects('Posteingang')).toEqual([]);
+  });
+
+  it('deletes to Deleted Items and archives by role, within the account', async () => {
+    graph.addFolder('Gelöschte Elemente', { wellKnown: 'deleteditems' });
+    graph.addMessage(inbox, { subject: 'Old news' });
+    graph.addMessage(inbox, { subject: 'Keep' });
+    const sync = createSync();
+    await settle(sync);
+
+    const deleted = folder('Gelöschte Elemente').id;
+    expect(store.moveToRole([idOf('Posteingang', 'Old news')], 'deleted')).toHaveLength(2);
+    // Already there, and no archive folder in this mailbox: nothing happens.
+    expect(store.moveToRole([idOf('Gelöschte Elemente', 'Old news')], 'deleted')).toEqual([]);
+    expect(store.moveToRole([idOf('Posteingang', 'Keep')], 'archive')).toEqual([]);
+    await settle(sync);
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(subjects('Gelöschte Elemente')).toEqual(['Old news']);
+    expect(subjects('Posteingang')).toEqual(['Keep']);
+    expect(store.listMessages(deleted, 'all', 0, 10).total).toBe(1);
   });
 });
 

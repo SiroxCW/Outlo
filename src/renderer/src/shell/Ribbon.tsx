@@ -2,6 +2,11 @@ import {
   Button,
   Divider,
   makeStyles,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   Tab,
   TabList,
   ToggleButton,
@@ -26,12 +31,14 @@ import {
   NavigationRegular,
   PinRegular,
   PrintRegular,
+  ShieldCheckmarkRegular,
+  ShieldErrorRegular,
   TagRegular,
   BeakerRegular,
   WindowRegular,
 } from '@fluentui/react-icons';
-import { useState, type ReactElement, type ReactNode } from 'react';
-import type { Message, TitleBarStyle } from '@shared/api';
+import { useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import type { Folder, Message, TitleBarStyle } from '@shared/api';
 import { t } from '../i18n';
 import { THEME_CHOICES, THEME_LABELS, type ThemeChoice } from '../theme';
 
@@ -85,6 +92,7 @@ const useStyles = makeStyles({
     justifyContent: 'flex-start',
     '& .fui-Button__icon': { fontSize: '16px', width: '16px', height: '16px' },
   },
+  folderMenu: { maxHeight: '60vh', overflowX: 'hidden', overflowY: 'auto' },
 });
 
 interface RibbonProps {
@@ -94,6 +102,13 @@ interface RibbonProps {
   onToggleFolders(): void;
   onSetRead(isRead: boolean): void;
   onSetFlagged(isFlagged: boolean): void;
+  // Undefined or false where the action does not apply to the open message.
+  onDelete: (() => void) | undefined;
+  onArchive: (() => void) | undefined;
+  junk: { notJunk: boolean; onClick(): void } | false | undefined;
+  // The folders of the open message's account, as places to move it to.
+  folders: Folder[];
+  onMove(folderId: number): void;
   onTheme(theme: ThemeChoice): void;
   onTitleBar(style: TitleBarStyle): void;
   demo: boolean;
@@ -120,6 +135,62 @@ interface ActionProps {
   icon: ReactElement;
   // Features of later phases are shown, but cannot be used yet.
   onClick?: () => void;
+}
+
+// The folders a message can be moved to, in the order of the folder pane, with their depth.
+function moveTargets(folders: Folder[], currentId: number | undefined) {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const depth = (folder: Folder) => {
+    let level = 0;
+    for (let parent = folder.parentId; parent !== null && level < 20; level++) {
+      parent = byId.get(parent)?.parentId ?? null;
+    }
+    return level;
+  };
+  // The outbox holds what is being sent. Nothing is moved there by hand.
+  return folders
+    .filter((folder) => folder.id !== currentId && folder.role !== 'outbox')
+    .map((folder) => ({ folder, depth: depth(folder) }));
+}
+
+function MoveMenu({
+  folders,
+  currentId,
+  onMove,
+}: {
+  folders: Folder[];
+  currentId: number | undefined;
+  onMove(folderId: number): void;
+}) {
+  const styles = useStyles();
+  const targets = useMemo(() => moveTargets(folders, currentId), [folders, currentId]);
+  return (
+    <Menu>
+      <MenuTrigger disableButtonEnhancement>
+        <Button
+          className={styles.large}
+          appearance="subtle"
+          icon={<FolderArrowRightRegular />}
+          disabled={targets.length === 0}
+        >
+          {t('ribbon.move')}
+        </Button>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList className={styles.folderMenu}>
+          {targets.map(({ folder, depth }) => (
+            <MenuItem
+              key={folder.id}
+              style={{ paddingLeft: `${8 + depth * 16}px` }}
+              onClick={() => onMove(folder.id)}
+            >
+              {folder.name}
+            </MenuItem>
+          ))}
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  );
 }
 
 function Large({ label, icon, onClick }: ActionProps) {
@@ -184,8 +255,25 @@ export function Ribbon(props: RibbonProps) {
             <Large label={t('ribbon.newMail')} icon={<ComposeRegular />} />
           </Group>
           <Group label={t('ribbon.delete')}>
-            <Large label={t('ribbon.delete')} icon={<DeleteRegular />} />
-            <Large label={t('ribbon.archive')} icon={<ArchiveRegular />} />
+            <Large label={t('ribbon.delete')} icon={<DeleteRegular />} onClick={props.onDelete} />
+            <Large
+              label={t('ribbon.archive')}
+              icon={<ArchiveRegular />}
+              onClick={props.onArchive}
+            />
+            {props.junk && props.junk.notJunk ? (
+              <Large
+                label={t('ribbon.notJunk')}
+                icon={<ShieldCheckmarkRegular />}
+                onClick={props.junk.onClick}
+              />
+            ) : (
+              <Large
+                label={t('ribbon.junk')}
+                icon={<ShieldErrorRegular />}
+                onClick={props.junk ? props.junk.onClick : undefined}
+              />
+            )}
           </Group>
           <Group label={t('ribbon.respond')}>
             <div className={styles.column}>
@@ -195,7 +283,7 @@ export function Ribbon(props: RibbonProps) {
             </div>
           </Group>
           <Group label={t('ribbon.move')}>
-            <Large label={t('ribbon.move')} icon={<FolderArrowRightRegular />} />
+            <MoveMenu folders={props.folders} currentId={message?.folderId} onMove={props.onMove} />
           </Group>
           <Group label={t('ribbon.tags')}>
             <Large

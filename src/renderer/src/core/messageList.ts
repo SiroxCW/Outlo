@@ -66,19 +66,20 @@ export class MessageListSource {
     if (this.view.show !== 'all') this.refresh();
   }
 
-  // Where a message is in the list, if its page is loaded and up to date.
-  offsetOf(id: number): number | undefined {
-    return this.find((message) => message.id === id);
+  // Where a message is in the list, if its page is loaded and up to date. With shown, also on a
+  // page that is about to be loaded again, as the list on screen still shows it.
+  offsetOf(id: number, shown = false): number | undefined {
+    return this.find((message) => message.id === id, shown);
   }
 
   // Where the row of a conversation is, under the same condition.
-  offsetOfThread(threadId: number): number | undefined {
-    return this.find((message) => message.threadId === threadId);
+  offsetOfThread(threadId: number, shown = false): number | undefined {
+    return this.find((message) => message.threadId === threadId, shown);
   }
 
-  private find(test: (message: ListEntry) => boolean): number | undefined {
+  private find(test: (message: ListEntry) => boolean, shown: boolean): number | undefined {
     for (const [pageIndex, page] of this.pages) {
-      if (page.version !== this.version) continue;
+      if (page.version !== this.version && !shown) continue;
       const index = page.messages.findIndex(test);
       if (index >= 0) return pageIndex * PAGE_SIZE + index;
     }

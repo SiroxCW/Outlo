@@ -1,5 +1,11 @@
 import { createLog } from '@shared/log';
-import { GraphError, OfflineError, SignInNeededError, type GraphClient } from '../graph/client';
+import {
+  GraphError,
+  OfflineError,
+  SignInNeededError,
+  type GraphClient,
+  type GraphRequest,
+} from '../graph/client';
 import type { MailStore, Operation } from '../mail/store';
 
 const log = createLog('changes');
@@ -17,11 +23,19 @@ export interface SendResult {
   error?: unknown;
 }
 
-// What Graph has to set for a change. Undefined for a kind this version does not know.
-function toPatch(operation: Operation): Record<string, unknown> | undefined {
-  if (operation.kind === 'read') return { isRead: operation.value };
-  if (operation.kind === 'flag') {
-    return { flag: { flagStatus: operation.value ? 'flagged' : 'notFlagged' } };
+// The request that makes a change at Graph. Undefined for a kind this version does not know.
+function toRequest(operation: Operation): { path: string; request: GraphRequest } | undefined {
+  if (operation.remoteId === null) return undefined;
+  const path = `/me/messages/${encodeURIComponent(operation.remoteId)}`;
+  const { kind, value } = operation;
+  if (kind === 'read')
+    return { path, request: { method: 'PATCH', body: { isRead: value === true } } };
+  if (kind === 'flag') {
+    const flagStatus = value === true ? 'flagged' : 'notFlagged';
+    return { path, request: { method: 'PATCH', body: { flag: { flagStatus } } } };
+  }
+  if (kind === 'move' && typeof value === 'string') {
+    return { path: `${path}/move`, request: { method: 'POST', body: { destinationId: value } } };
   }
   return undefined;
 }
@@ -43,28 +57,25 @@ export async function sendOperations(
   if (due.length === 0) return null;
 
   // Two changes of one message at the same time could get in each other's way at the provider.
-  const round: { operation: Operation; patch: Record<string, unknown> }[] = [];
+  const round: { operation: Operation; path: string; request: GraphRequest }[] = [];
   const messages = new Set<string>();
   for (const operation of due) {
-    const patch = toPatch(operation);
-    if (!patch || operation.remoteId === null) {
+    const sent = toRequest(operation);
+    if (!sent) {
       store.dropOperation(operation);
       log.warn('Dropped a change of an unknown kind', { account: accountId, kind: operation.kind });
-    } else if (!messages.has(operation.remoteId)) {
-      messages.add(operation.remoteId);
-      round.push({ operation, patch });
+    } else if (!messages.has(operation.remoteId!)) {
+      messages.add(operation.remoteId!);
+      round.push({ operation, ...sent });
     }
   }
 
   const started = performance.now();
+  const operations = round.map((entry) => entry.operation);
+  store.markSending(operations, true);
   const results = await Promise.allSettled(
-    round.map(({ operation, patch }) =>
-      client.request(`/me/messages/${encodeURIComponent(operation.remoteId!)}`, {
-        method: 'PATCH',
-        body: patch,
-      }),
-    ),
-  );
+    round.map(({ path, request }) => client.request<{ id?: string } | undefined>(path, request)),
+  ).finally(() => store.markSending(operations, false));
 
   const changed = new Set<number>();
   const counts = { sent: 0, waiting: 0, undone: 0 };
@@ -74,6 +85,13 @@ export async function sendOperations(
     const fields = { account: accountId, operation: operation.id, kind: operation.kind };
     if (result.status === 'fulfilled') {
       store.finishOperation(operation);
+      // With immutable IDs a message keeps its ID when it moves. Should it get a new one anyway,
+      // the message here follows, or the sync would take it for a second message.
+      const newId = result.value?.id;
+      if (operation.kind === 'move' && newId && newId !== operation.remoteId) {
+        store.replaceRemoteId(accountId, operation.remoteId!, newId);
+        log.info('A moved message got a new ID', fields);
+      }
       counts.sent++;
       return;
     }
@@ -81,12 +99,6 @@ export async function sendOperations(
     // Without a connection or a sign-in nothing can be sent. The change stays due.
     if (error instanceof OfflineError || error instanceof SignInNeededError) {
       stopped = error;
-      return;
-    }
-    // The message is gone at the provider, and the sync removes it here too.
-    if (error instanceof GraphError && error.status === 404) {
-      store.dropOperation(operation);
-      log.info('Dropped a change of a message that is gone', fields);
       return;
     }
     const attempt = operation.attempts + 1;
@@ -99,6 +111,15 @@ export async function sendOperations(
     }
     for (const folderId of store.undoOperation(operation)) changed.add(folderId);
     counts.undone++;
+    // Gone: the message, or for a move maybe its new folder. Where the message is now is not
+    // certain, so its old folder is read again.
+    if (error instanceof GraphError && error.status === 404) {
+      log.info('A change was undone: its message or folder is gone', fields);
+      if (operation.kind === 'move' && typeof operation.before === 'string') {
+        store.restartFolderSync(accountId, operation.before);
+      }
+      return;
+    }
     log.warn('A change was refused and undone here', { ...fields, attempts: attempt }, error);
   });
 

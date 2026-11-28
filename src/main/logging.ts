@@ -132,6 +132,8 @@ export function watchContents(contents: WebContents, page: 'window' | 'web'): vo
   );
   contents.on('console-message', (details) => {
     if (details.level !== 'error' || details.frame !== contents.mainFrame) return;
+    // Chromium reports this when a layout settles over several frames. It is harmless.
+    if (details.message.startsWith('ResizeObserver loop')) return;
     pageLog.error('Error in the window', {
       ...fields,
       source: details.sourceId,

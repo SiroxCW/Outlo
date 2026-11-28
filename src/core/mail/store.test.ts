@@ -199,6 +199,37 @@ describe('setRead', () => {
   });
 });
 
+describe('moving', () => {
+  it('moves messages within their account and keeps the counters right', () => {
+    const a = add();
+    const b = add({ isRead: true });
+    expect(store.moveMessages([a, b], archive).sort()).toEqual([inbox, archive].sort());
+    expect(folder(inbox)).toMatchObject({ totalCount: 0, unreadCount: 0 });
+    expect(folder(archive)).toMatchObject({ totalCount: 2, unreadCount: 1 });
+    expect(store.getMessage(a)!.folderId).toBe(archive);
+    expect(store.hasOperations(accountId)).toBe(false);
+
+    expect(store.moveToRole([a], 'inbox')).toEqual([archive, inbox]);
+    expect(store.moveToRole([a], 'inbox')).toEqual([]);
+    expect(store.moveToRole([a], 'junk')).toEqual([]);
+  });
+
+  it('does not move a message into the folder of another account', () => {
+    const a = add();
+    const other = store.insertAccount('demo', 'kim@mailbox.example', 'Kim', 1);
+    const elsewhere = store.insertFolder({
+      accountId: other,
+      parentId: null,
+      name: 'Inbox',
+      role: 'inbox',
+      sortOrder: 0,
+      isFavorite: false,
+    });
+    expect(store.moveMessages([a], elsewhere)).toEqual([]);
+    expect(store.getMessage(a)!.folderId).toBe(inbox);
+  });
+});
+
 describe('setFlagged', () => {
   it('sets and clears the flag and reports the folder', () => {
     const a = add();

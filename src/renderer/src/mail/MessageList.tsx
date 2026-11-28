@@ -79,22 +79,27 @@ interface MessageListProps {
   source: MessageListSource | undefined;
   state: MessageListState | undefined;
   selectedId: number | undefined;
+  // The open message was picked below its conversation. Its own row is marked, not the
+  // conversation's.
+  selectedChild: boolean;
   onFilter(filter: MessageFilter): void;
   onView(view: ListView): void;
-  onSelect(message: MessageSummary): void;
+  onSelect(message: MessageSummary, child: boolean): void;
+  // The Delete key. Undefined where the open message cannot be deleted.
+  onDelete: (() => void) | undefined;
 }
 
 export function MessageList(props: MessageListProps) {
   const styles = useStyles();
   const { folder, view, source, state, selectedId } = props;
+  // The newest message of an open conversation has two rows: the conversation's and its own.
+  // Only the one the user clicked is marked.
+  const pickedChild = props.selectedChild;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const selectedOffset = useRef<number>(undefined);
   // The conversation whose messages are shown below its row. One at a time.
   const [open, setOpen] = useState<OpenConversation>();
-  // The newest message of an open conversation has two rows: the conversation's and its own.
-  // Only the one the user clicked is marked.
-  const [pickedChild, setPickedChild] = useState(false);
   const folderNames = useMemo(
     () => new Map(props.folders.map((entry) => [entry.id, entry.name])),
     [props.folders],
@@ -163,11 +168,15 @@ export function MessageList(props: MessageListProps) {
 
   const select = (message: MessageSummary, offset: number, child = false) => {
     selectedOffset.current = offset;
-    setPickedChild(child);
-    props.onSelect(message);
+    props.onSelect(message, child);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Delete' && props.onDelete) {
+      event.preventDefault();
+      props.onDelete();
+      return;
+    }
     const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0;
     if (step === 0 || !source || !state || state.total === 0) return;
     event.preventDefault();

@@ -39,6 +39,8 @@ export class FakeGraph {
   // Lets a test answer a request itself, for example with an error.
   intercept: ((url: URL, method: string) => Response | undefined) | undefined;
   offline = false;
+  // Graph keeps immutable IDs when a message moves. Lets a test check what happens if not.
+  newIdOnMove = false;
   private readonly folders = new Map<string, FakeFolder>();
   private readonly changes: Change[] = [];
   private readonly bodies = new Map<string, { contentType: string; content: string }>();
@@ -179,6 +181,11 @@ export class FakeGraph {
       const size = Number(/odata\.maxpagesize=(\d+)/.exec(headers.Prefer)?.[1] ?? 10);
       return this.messageDelta(url, messages[1]!, size);
     }
+    const move = /^\/me\/messages\/([^/]+)\/move$/.exec(path);
+    if (move && method === 'POST') {
+      const { destinationId } = JSON.parse(init.body as string) as { destinationId?: string };
+      return this.moveRequest(move[1]!, destinationId ?? '');
+    }
     const single = /^\/me\/messages\/([^/]+)(\/attachments(?:\/([^/]+)\/\$value)?)?$/.exec(path);
     if (single && method === 'PATCH' && !single[2]) {
       return this.patch(single[1]!, JSON.parse(init.body as string) as Record<string, unknown>);
@@ -215,6 +222,21 @@ export class FakeGraph {
     // As with Graph, pictures inside the text alone do not count as attachments.
     const hasAttachments = attachments.some((entry) => !entry.isInline);
     return json(200, { id, body, hasAttachments });
+  }
+
+  private moveRequest(id: string, destinationId: string): Response {
+    const from = [...this.folders.values()].find((entry) => entry.messages.has(id));
+    if (!from) return failure(404, 'ErrorItemNotFound', 'The message does not exist');
+    if (!this.folders.has(destinationId)) {
+      return failure(404, 'ErrorItemNotFound', 'The destination folder does not exist');
+    }
+    const message = from.messages.get(id)!;
+    this.removeMessage(from.id, id);
+    const newId = this.addMessage(destinationId, {
+      ...message,
+      id: this.newIdOnMove ? `${id}-moved` : id,
+    });
+    return json(200, this.find(newId));
   }
 
   // Sets what the app may change about a message. Anything else is refused, as a mistake.

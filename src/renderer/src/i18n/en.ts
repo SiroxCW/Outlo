@@ -15,6 +15,8 @@ export const en = {
   'ribbon.newMail': 'New mail',
   'ribbon.delete': 'Delete',
   'ribbon.archive': 'Archive',
+  'ribbon.junk': 'Junk',
+  'ribbon.notJunk': 'Not junk',
   'ribbon.respond': 'Respond',
   'ribbon.reply': 'Reply',
   'ribbon.replyAll': 'Reply all',
