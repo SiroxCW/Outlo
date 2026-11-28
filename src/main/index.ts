@@ -6,6 +6,11 @@ import { handleAttachmentRequests } from './attachments';
 import { startCore } from './core-process';
 import { getMicrosoftToken } from './microsoft/sign-in';
 import { hardenSession, hardenWebContents } from './security';
+import {
+  guardWebAccountContents,
+  handleWebAccountRequests,
+  isWebAccountContents,
+} from './web-accounts';
 import { createMainWindow, handleWindowRequests } from './window';
 import { readDemoSession } from './window-settings';
 
@@ -30,7 +35,11 @@ app.on('second-instance', () => {
 registerAppScheme();
 app.enableSandbox();
 
-app.on('web-contents-created', (_event, contents) => hardenWebContents(contents));
+// Web accounts run in sessions of their own and follow their own rules.
+app.on('web-contents-created', (_event, contents) => {
+  if (isWebAccountContents(contents)) guardWebAccountContents(contents);
+  else hardenWebContents(contents);
+});
 app.on('window-all-closed', () => app.quit());
 
 void app.whenReady().then(() => {
@@ -46,5 +55,6 @@ void app.whenReady().then(() => {
   handleWindowRequests();
   handleAccountRequests();
   handleAttachmentRequests();
+  handleWebAccountRequests();
   createMainWindow();
 });

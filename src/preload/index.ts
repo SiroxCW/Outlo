@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   CORE_PORT,
   ACCOUNTS_ADD_MICROSOFT,
+  ACCOUNTS_ADD_WEB,
   ACCOUNTS_CANCEL_ADD,
   ACCOUNTS_REMOVE,
   ATTACHMENTS_OPEN,
@@ -9,6 +10,9 @@ import {
   CORE_PORT_REQUEST,
   SESSION_GET_INFO,
   SESSION_SET_DEMO,
+  WEB_HIDE,
+  WEB_RELOAD,
+  WEB_SHOW,
   WINDOW_GET_TITLE_BAR,
   WINDOW_SET_COLORS,
   WINDOW_SET_TITLE_BAR,
@@ -48,12 +52,18 @@ const bridge: OutloBridge = {
   },
   accounts: {
     addMicrosoft: () => ipcRenderer.invoke(ACCOUNTS_ADD_MICROSOFT),
+    addWeb: (email, kind) => ipcRenderer.invoke(ACCOUNTS_ADD_WEB, email, kind),
     cancelAdd: () => ipcRenderer.send(ACCOUNTS_CANCEL_ADD),
     remove: (accountId) => ipcRenderer.invoke(ACCOUNTS_REMOVE, accountId),
   },
   attachments: {
     open: (attachmentId) => ipcRenderer.invoke(ATTACHMENTS_OPEN, attachmentId),
     save: (attachmentId) => ipcRenderer.invoke(ATTACHMENTS_SAVE, attachmentId),
+  },
+  web: {
+    show: (accountId, bounds) => ipcRenderer.send(WEB_SHOW, accountId, bounds),
+    hide: () => ipcRenderer.send(WEB_HIDE),
+    reload: (accountId) => ipcRenderer.send(WEB_RELOAD, accountId),
   },
   session: {
     getInfo: () => ipcRenderer.invoke(SESSION_GET_INFO),

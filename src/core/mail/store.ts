@@ -397,10 +397,12 @@ export class MailStore {
     return Number(result.lastInsertRowid);
   }
 
-  // Deletes the account with its folders and messages. Returns its ID at the provider.
-  removeAccount(id: number): string | null {
-    const row = this.sql('DELETE FROM accounts WHERE id = ? RETURNING remote_id').get(id);
-    return row ? (row.remote_id as string | null) : null;
+  // Deletes the account with its folders and messages. Returns what it was.
+  removeAccount(id: number): { provider: string; remoteId: string | null } | null {
+    const row = this.sql('DELETE FROM accounts WHERE id = ? RETURNING provider, remote_id').get(id);
+    return row
+      ? { provider: row.provider as string, remoteId: row.remote_id as string | null }
+      : null;
   }
 
   deleteAllAccounts(): void {
@@ -472,12 +474,17 @@ export class MailStore {
 
   // Writes used by the sync with a mail provider.
 
-  listRemoteAccounts(provider: string): { id: number; remoteId: string }[] {
+  listRemoteAccounts(provider: string): { id: number; remoteId: string; email: string }[] {
     return this.sql(
-      'SELECT id, remote_id FROM accounts WHERE provider = ? AND remote_id IS NOT NULL ORDER BY id',
+      `SELECT id, remote_id, email FROM accounts
+       WHERE provider = ? AND remote_id IS NOT NULL ORDER BY id`,
     )
       .all(provider)
-      .map((row) => ({ id: row.id as number, remoteId: row.remote_id as string }));
+      .map((row) => ({
+        id: row.id as number,
+        remoteId: row.remote_id as string,
+        email: row.email as string,
+      }));
   }
 
   listSyncFolders(accountId: number): SyncFolder[] {

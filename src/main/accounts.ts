@@ -16,6 +16,7 @@ import {
   hasSecureStorage,
 } from './microsoft/sign-in';
 import { isTrustedSender } from './renderer-site';
+import { closeWebAccounts, forgetWebAccount } from './web-accounts';
 import { writeDemoSession } from './window-settings';
 
 export function handleAccountRequests(): void {
@@ -32,8 +33,10 @@ export function handleAccountRequests(): void {
 
   ipcMain.handle(ACCOUNTS_REMOVE, async (event, accountId: unknown) => {
     if (!isTrustedSender(event) || typeof accountId !== 'number' || isDemoSession()) return;
-    const { remoteId } = await requestCore('accounts.remove', { id: accountId });
-    if (remoteId) await forgetMicrosoftAccount(remoteId);
+    const { provider, remoteId } = await requestCore('accounts.remove', { id: accountId });
+    if (!remoteId) return;
+    if (provider === 'web') await forgetWebAccount(remoteId);
+    else await forgetMicrosoftAccount(remoteId);
   });
 
   ipcMain.handle(SESSION_GET_INFO, async (): Promise<SessionInfo> => ({
@@ -44,6 +47,7 @@ export function handleAccountRequests(): void {
   ipcMain.handle(SESSION_SET_DEMO, async (event, demo: unknown) => {
     if (!isTrustedSender(event) || typeof demo !== 'boolean') return;
     writeDemoSession(demo);
+    closeWebAccounts();
     await setDemoSession(demo);
   });
 }

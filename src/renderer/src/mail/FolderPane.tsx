@@ -18,10 +18,12 @@ import {
   DraftsRegular,
   FolderProhibitedRegular,
   FolderRegular,
+  GlobeRegular,
   MailArrowUpRegular,
   MailInboxRegular,
   MoreHorizontalRegular,
   PersonAddRegular,
+  PersonKeyRegular,
   SendRegular,
 } from '@fluentui/react-icons';
 import { useState, type ReactElement } from 'react';
@@ -92,6 +94,15 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     ':hover': { textDecorationLine: 'underline' },
   },
+  badge: {
+    flexShrink: 0,
+    padding: '0 6px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralBackground5,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: '16px',
+  },
   none: { padding: '4px 0 4px 28px', color: tokens.colorNeutralForeground3 },
   divider: { height: '1px', margin: '8px 8px 8px 0', backgroundColor: tokens.colorNeutralStroke2 },
 });
@@ -113,6 +124,10 @@ interface FolderPaneProps {
   // Missing in the demo, where accounts cannot be added or removed.
   onAddAccount?: () => void;
   onRemoveAccount?: (account: Account) => void;
+  // For accounts in web mode: which one is open, opening one, and the try to sign it in fully.
+  selectedWebAccountId: number | undefined;
+  onSelectWeb(accountId: number): void;
+  onFullSignIn?: (account: Account) => void;
   syncStatus: AccountSyncStatus[];
 }
 
@@ -148,11 +163,13 @@ export function FolderPane(props: FolderPaneProps) {
         </span>
         <span className={styles.name}>{label}</span>
       </button>
+      {account?.provider === 'web' && <span className={styles.badge}>{t('folders.webBadge')}</span>}
       {account && stateOf(account)?.state === 'syncing' && (
         <Spinner size="extra-tiny" aria-label={t('sync.syncing')} />
       )}
       {account && onRemoveAccount && (
-        <Menu>
+        // Opens inside the pane. Next to it may lie the view of a web account, which would cover it.
+        <Menu positioning={{ position: 'below', align: 'end' }}>
           <MenuTrigger disableButtonEnhancement>
             <Button
               appearance="subtle"
@@ -163,6 +180,11 @@ export function FolderPane(props: FolderPaneProps) {
           </MenuTrigger>
           <MenuPopover>
             <MenuList>
+              {account.provider === 'web' && props.onFullSignIn && (
+                <MenuItem icon={<PersonKeyRegular />} onClick={() => props.onFullSignIn?.(account)}>
+                  {t('folders.fullSignIn')}
+                </MenuItem>
+              )}
               <MenuItem icon={<DeleteRegular />} onClick={() => onRemoveAccount(account)}>
                 {t('folders.removeAccount')}
               </MenuItem>
@@ -247,7 +269,23 @@ export function FolderPane(props: FolderPaneProps) {
           {section(`account${account.id}`, account.email, account)}
           {syncProblem(account)}
           {!collapsed.has(`account${account.id}`) &&
-            (children(null, account.id).length > 0 ? (
+            (account.provider === 'web' ? (
+              <button
+                type="button"
+                className={mergeClasses(
+                  styles.row,
+                  account.id === props.selectedWebAccountId && styles.selected,
+                )}
+                style={{ paddingLeft: 28 }}
+                aria-current={account.id === props.selectedWebAccountId}
+                onClick={() => props.onSelectWeb(account.id)}
+              >
+                <span className={styles.icon}>
+                  <GlobeRegular />
+                </span>
+                <span className={styles.name}>{t('folders.webEntry')}</span>
+              </button>
+            ) : children(null, account.id).length > 0 ? (
               tree(account.id, null, 0)
             ) : (
               <div className={styles.none}>{t('folders.none')}</div>

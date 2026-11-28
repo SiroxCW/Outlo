@@ -12,12 +12,14 @@ import { t } from '../i18n';
 
 interface RemoveAccountDialogProps {
   account: Account;
+  onRemoved(): void;
   onClose(): void;
 }
 
-export function RemoveAccountDialog({ account, onClose }: RemoveAccountDialogProps) {
+export function RemoveAccountDialog({ account, onRemoved, onClose }: RemoveAccountDialogProps) {
   const remove = () => {
     void window.outlo.accounts.remove(account.id);
+    onRemoved();
     onClose();
   };
   return (

@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Account, MessageFilter, SessionInfo, TitleBarStyle } from '@shared/api';
 import { AddAccountDialog } from './accounts/AddAccountDialog';
 import { RemoveAccountDialog } from './accounts/RemoveAccountDialog';
+import { WebAccountView } from './accounts/WebAccountView';
 import { Welcome } from './accounts/Welcome';
 import { useMessageList } from './core/messageList';
 import { useMailboxes } from './core/useFolders';
@@ -83,7 +84,9 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const [selectedId, setSelectedId] = useState<number>();
   const [search, setSearch] = useState('');
   const [foldersVisible, setFoldersVisible] = useState(true);
-  const [addingAccount, setAddingAccount] = useState(false);
+  // False: closed. True: add an account. An account: sign it in fully, to replace its web mode.
+  const [addingAccount, setAddingAccount] = useState<boolean | Account>(false);
+  const [chosenWebAccountId, setChosenWebAccountId] = useState<number>();
   const [removing, setRemoving] = useState<Account>();
   const setDemo = (demo: boolean) => void window.outlo.session.setDemo(demo);
   const [folderWidth, setFolderWidth] = useState(() => Number(settings.get('folderWidth', '240')));
@@ -112,6 +115,18 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   }, [message, editable]);
 
   const searching = search.trim() !== '';
+  // An account in web mode is shown when the user picked it, or when there is no mail to show.
+  const webAccounts = mailboxes?.accounts.filter((entry) => entry.provider === 'web') ?? [];
+  // Right after an account was added, the list of accounts does not contain it yet. Showing
+  // another account for that moment would load a page nobody asked for.
+  const chosenArrived =
+    chosenWebAccountId === undefined ||
+    mailboxes?.accounts.some((entry) => entry.id === chosenWebAccountId) === true;
+  const webAccount =
+    searching || !chosenArrived
+      ? undefined
+      : (webAccounts.find((entry) => entry.id === chosenWebAccountId) ??
+        (folders.length === 0 ? webAccounts[0] : undefined));
   const noAccounts = !session.demo && mailboxes?.accounts.length === 0;
   return (
     // No class of our own on the provider: Fluent copies the provider's classes to the layer
@@ -169,8 +184,15 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                         onAddAccount={session.demo ? undefined : () => setAddingAccount(true)}
                         onRemoveAccount={session.demo ? undefined : setRemoving}
                         syncStatus={syncStatus}
-                        selectedFolderId={searching ? undefined : folder?.id}
+                        selectedFolderId={searching || webAccount ? undefined : folder?.id}
+                        selectedWebAccountId={webAccount?.id}
+                        onSelectWeb={(accountId) => {
+                          setChosenWebAccountId(accountId);
+                          setSearch('');
+                        }}
+                        onFullSignIn={setAddingAccount}
                         onSelect={(folderId) => {
+                          setChosenWebAccountId(undefined);
                           setChosenFolderId(folderId);
                           setSelectedId(undefined);
                           setSearch('');
@@ -186,36 +208,47 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                     />
                   </>
                 )}
-                <div className={`${styles.pane} ${styles.card}`} style={{ width: listWidth }}>
-                  {error && <div className={styles.error}>{`${t('error.core')}: ${error}`}</div>}
-                  {searching ? (
-                    <SearchResults
-                      query={search}
-                      selectedId={selectedId}
-                      onSelect={(selected) => setSelectedId(selected.id)}
+                {webAccount ? (
+                  <WebAccountView
+                    account={webAccount}
+                    covered={addingAccount !== false || removing !== undefined}
+                  />
+                ) : (
+                  <>
+                    <div className={`${styles.pane} ${styles.card}`} style={{ width: listWidth }}>
+                      {error && (
+                        <div className={styles.error}>{`${t('error.core')}: ${error}`}</div>
+                      )}
+                      {searching ? (
+                        <SearchResults
+                          query={search}
+                          selectedId={selectedId}
+                          onSelect={(selected) => setSelectedId(selected.id)}
+                        />
+                      ) : (
+                        <MessageList
+                          folder={folder}
+                          filter={filter}
+                          source={source}
+                          state={state}
+                          selectedId={selectedId}
+                          onFilter={setInboxFilter}
+                          onSelect={(selected) => setSelectedId(selected.id)}
+                        />
+                      )}
+                    </div>
+                    <Splitter
+                      width={listWidth}
+                      min={280}
+                      max={720}
+                      onResize={setListWidth}
+                      onCommit={(width) => settings.set('listWidth', String(width))}
                     />
-                  ) : (
-                    <MessageList
-                      folder={folder}
-                      filter={filter}
-                      source={source}
-                      state={state}
-                      selectedId={selectedId}
-                      onFilter={setInboxFilter}
-                      onSelect={(selected) => setSelectedId(selected.id)}
-                    />
-                  )}
-                </div>
-                <Splitter
-                  width={listWidth}
-                  min={280}
-                  max={720}
-                  onResize={setListWidth}
-                  onCommit={(width) => settings.set('listWidth', String(width))}
-                />
-                <div className={styles.reading}>
-                  <ReadingPane open={{ ...opened, message }} dark={dark} />
-                </div>
+                    <div className={styles.reading}>
+                      <ReadingPane open={{ ...opened, message }} dark={dark} />
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -224,12 +257,23 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
       {addingAccount && (
         <AddAccountDialog
           secureStorage={session.secureStorage}
-          onAdded={() => setAddingAccount(false)}
+          replaces={addingAccount === true ? undefined : addingAccount}
+          onAdded={(accountId) => {
+            setAddingAccount(false);
+            setChosenWebAccountId(accountId);
+          }}
           onClose={() => setAddingAccount(false)}
         />
       )}
       {removing && (
-        <RemoveAccountDialog account={removing} onClose={() => setRemoving(undefined)} />
+        <RemoveAccountDialog
+          account={removing}
+          // Forget the choice of a removed account, so the next one can take its place.
+          onRemoved={() => {
+            if (removing.id === chosenWebAccountId) setChosenWebAccountId(undefined);
+          }}
+          onClose={() => setRemoving(undefined)}
+        />
       )}
     </FluentProvider>
   );

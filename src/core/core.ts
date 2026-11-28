@@ -148,7 +148,7 @@ export function createCore(options: CoreOptions) {
     'accounts.add': (params) => {
       const input = check.record(params, 'params');
       const id = store.addAccount(
-        check.oneOf(input.provider, 'provider', ['graph'] as const),
+        check.oneOf(input.provider, 'provider', ['graph', 'web'] as const),
         check.text(input.remoteId, 'remoteId', 200),
         check.text(input.email, 'email', 320),
         check.text(input.displayName, 'displayName', 200),
@@ -159,11 +159,16 @@ export function createCore(options: CoreOptions) {
     },
 
     'accounts.remove': (params) => {
-      const remoteId = store.removeAccount(check.id(check.record(params, 'params').id, 'id'));
+      const removed = store.removeAccount(check.id(check.record(params, 'params').id, 'id'));
       server.emit('accounts.changed', undefined);
       server.emit('folders.changed', undefined);
       engine?.refresh();
-      return { remoteId };
+      return removed ?? { provider: null, remoteId: null };
+    },
+
+    'accounts.listRemote': (params) => {
+      const provider = check.text(check.record(params, 'params').provider, 'provider', 20);
+      return store.listRemoteAccounts(provider);
     },
 
     'attachments.info': (params) => {

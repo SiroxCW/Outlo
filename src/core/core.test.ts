@@ -215,9 +215,38 @@ describe('accounts through the main process', () => {
   it('removes an account and returns its ID at the provider', async () => {
     const { host, client } = startWithHost();
     const { id } = await host.request('accounts.add', account);
-    expect(await host.request('accounts.remove', { id })).toEqual({ remoteId: 'home-1' });
+    expect(await host.request('accounts.remove', { id })).toEqual({
+      provider: 'graph',
+      remoteId: 'home-1',
+    });
     expect(await client.request('accounts.list', undefined)).toEqual([]);
-    expect(await host.request('accounts.remove', { id })).toEqual({ remoteId: null });
+    expect(await host.request('accounts.remove', { id })).toEqual({
+      provider: null,
+      remoteId: null,
+    });
+  });
+
+  it('keeps accounts in web mode out of the mail sync', async () => {
+    const { host, client } = startWithHost();
+    const web = {
+      provider: 'web',
+      remoteId: 'partition-1',
+      email: 'me@company.example',
+      displayName: 'me@company.example',
+    } as const;
+    const { id } = await host.request('accounts.add', web);
+    await host.request('accounts.add', account);
+
+    expect(await host.request('accounts.listRemote', { provider: 'web' })).toEqual([
+      { id, remoteId: 'partition-1', email: 'me@company.example' },
+    ]);
+    expect(
+      (await client.request('accounts.list', undefined)).map((entry) => entry.provider),
+    ).toEqual(['web', 'graph']);
+    expect(await host.request('accounts.remove', { id })).toEqual({
+      provider: 'web',
+      remoteId: 'partition-1',
+    });
   });
 
   it('does not offer these methods to the UI', async () => {

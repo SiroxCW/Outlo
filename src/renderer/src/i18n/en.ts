@@ -46,6 +46,14 @@ export const en = {
   'sync.error': 'Synchronizing failed:',
   'folders.accountMenu': 'Account options',
   'folders.removeAccount': 'Remove account',
+  'folders.fullSignIn': 'Try the full sign-in',
+  'folders.webBadge': 'Web',
+  'folders.webEntry': 'Outlook on the web',
+
+  'web.info':
+    'Web mode: this account shows Outlook on the web. Search, offline use and the other accounts of Outlo Mail do not include it.',
+  'web.reload': 'Reload',
+  'web.loading': 'Outlook on the web is loading',
 
   'welcome.title': 'Welcome to Outlo Mail',
   'welcome.text': 'Add your first account to get started. Your mail stays on this computer.',
@@ -58,8 +66,20 @@ export const en = {
   'ribbon.demo': 'Demo',
 
   'add.title': 'Add account',
-  'add.text': 'The sign-in opens in your web browser. Outlo Mail never sees your password.',
   'add.microsoft': 'Sign in with Microsoft',
+  'add.modeFull': 'Full app',
+  'add.modeFullText':
+    'Your mail is kept on this computer: fast search, reading without a connection, one inbox for all accounts. For this you allow Outlo Mail to read your mailbox at Microsoft.',
+  'add.modeWeb': 'Web mode',
+  'add.modeWebText':
+    'Outlo Mail shows Outlook on the web for this account. It needs no permission to your mailbox, keeps none of your mail and also works when your company or school blocks the full app.',
+  'add.fullHint': 'The sign-in opens in your web browser. Outlo Mail never sees your password.',
+  'add.webHint': 'You sign in inside the app, on the page of Microsoft.',
+  'add.webLimits':
+    'Web mode is more limited than the full app: search, reading without a connection and the other accounts leave this one out. Outlo Mail does its best to make it feel like part of the app anyway.',
+  'add.kindWork': 'Work or school account',
+  'add.kindPersonal': 'Personal account',
+  'add.webOffer': 'Until then you can use the account in web mode.',
   'add.others': 'Gmail and other providers follow in a later version.',
   'add.noKeyring':
     'No keyring was found on this system. Your sign-in is stored on this computer with weak protection only.',
@@ -71,6 +91,9 @@ export const en = {
     'Your organization does not let its members connect mail apps on their own. An administrator can approve Outlo Mail once for everyone by opening this address:',
   'add.blockedHint': 'After the approval, add the account again.',
   'add.copy': 'Copy address',
+  'add.useWeb': 'Use web mode',
+  'add.webEmail': 'Email address of the account',
+  'add.webAdd': 'Add account',
   'add.copied': 'Copied',
   'add.failedTitle': 'The sign-in did not work',
   'add.retry': 'Try again',

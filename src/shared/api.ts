@@ -9,6 +9,8 @@ export interface CoreInfo {
 
 export interface Account {
   id: number;
+  // 'graph' for a Microsoft account with its mail in the app, 'web' for an account in web mode,
+  // 'demo' for invented data.
   provider: string;
   email: string;
   displayName: string;
@@ -165,11 +167,19 @@ export type CoreRequest = <Method extends keyof CoreRequests>(
 export type HostRequests = {
   // Adds the account, or returns the existing one if it was added before.
   'accounts.add': {
-    params: { provider: 'graph'; remoteId: string; email: string; displayName: string };
+    params: { provider: 'graph' | 'web'; remoteId: string; email: string; displayName: string };
     result: { id: number };
   };
   // Deletes the account with all its local data. Returns its ID at the provider.
-  'accounts.remove': { params: { id: number }; result: { remoteId: string | null } };
+  'accounts.remove': {
+    params: { id: number };
+    result: { provider: string | null; remoteId: string | null };
+  };
+  // The accounts of one provider with their IDs at that provider.
+  'accounts.listRemote': {
+    params: { provider: string };
+    result: { id: number; remoteId: string; email: string }[];
+  };
   'attachments.info': {
     params: { id: number };
     result: { name: string; size: number; contentType: string } | null;
@@ -189,6 +199,10 @@ export type HostServices = {
   'auth.getToken': { params: { remoteId: string; forceRefresh: boolean }; result: TokenResult };
 };
 
+// Microsoft runs two versions of Outlook on the web. Which one an account belongs to cannot be
+// told from its address alone.
+export type WebAccountKind = 'work' | 'personal';
+
 export type AddAccountResult =
   | { status: 'added'; accountId: number }
   | { status: 'cancelled' }
@@ -199,6 +213,8 @@ export type AddAccountResult =
 // Account functions that need the main process: it runs the sign-in and keeps the secrets.
 export interface AccountsBridge {
   addMicrosoft(): Promise<AddAccountResult>;
+  // Adds an account in web mode. The address is only a label and a hint for the sign-in page.
+  addWeb(email: string, kind: WebAccountKind): Promise<AddAccountResult>;
   cancelAdd(): void;
   remove(accountId: number): Promise<void>;
 }
@@ -214,6 +230,22 @@ export type AttachmentResult =
 export interface AttachmentsBridge {
   open(attachmentId: number): Promise<AttachmentResult>;
   save(attachmentId: number): Promise<AttachmentResult>;
+}
+
+// Where in the window the web view of an account is shown, in CSS pixels.
+export interface ViewBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// Accounts in web mode. The main process shows Outlook on the web in a view of its own, on
+// top of the place the UI names. The UI never sees the page.
+export interface WebBridge {
+  show(accountId: number, bounds: ViewBounds): void;
+  hide(): void;
+  reload(accountId: number): void;
 }
 
 export interface SessionInfo {
@@ -251,6 +283,7 @@ export interface OutloBridge {
   window: WindowBridge;
   accounts: AccountsBridge;
   attachments: AttachmentsBridge;
+  web: WebBridge;
   session: SessionBridge;
 }
 
@@ -263,10 +296,14 @@ export const WINDOW_GET_TITLE_BAR = 'window:get-title-bar';
 export const WINDOW_SET_TITLE_BAR = 'window:set-title-bar';
 export const WINDOW_SET_COLORS = 'window:set-colors';
 export const ACCOUNTS_ADD_MICROSOFT = 'accounts:add-microsoft';
+export const ACCOUNTS_ADD_WEB = 'accounts:add-web';
 export const ACCOUNTS_CANCEL_ADD = 'accounts:cancel-add';
 export const ACCOUNTS_REMOVE = 'accounts:remove';
 export const ATTACHMENTS_OPEN = 'attachments:open';
 export const ATTACHMENTS_SAVE = 'attachments:save';
+export const WEB_SHOW = 'web:show';
+export const WEB_HIDE = 'web:hide';
+export const WEB_RELOAD = 'web:reload';
 export const SESSION_GET_INFO = 'session:get-info';
 export const SESSION_SET_DEMO = 'session:set-demo';
 
