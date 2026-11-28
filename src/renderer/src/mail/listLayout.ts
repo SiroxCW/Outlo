@@ -7,7 +7,10 @@ export interface ListGroup {
 }
 
 export type ListRow =
-  { kind: 'header'; group: ListGroup } | { kind: 'message'; group: ListGroup; offset: number };
+  | { kind: 'header'; group: ListGroup }
+  | { kind: 'message'; group: ListGroup; offset: number }
+  // One of the messages of an open conversation, below the row of the conversation.
+  | { kind: 'child'; group: ListGroup; offset: number; index: number };
 
 export interface ListLayout {
   rowCount: number;
@@ -53,6 +56,26 @@ export function createListLayout(groups: ListGroup[], collapsed: ReadonlySet<str
       );
       if (groupIndex < 0 || collapsed.has(visible[groupIndex]!.key)) return null;
       return firstRows[groupIndex]! + 1 + offset - visible[groupIndex]!.offset;
+    },
+  };
+}
+
+// Opens the conversation at one position of the list: its messages follow its row, as rows of
+// their own. Nothing changes while the conversation is not on screen.
+export function expandRow(layout: ListLayout, offset: number, count: number): ListLayout {
+  const row = layout.rowOfOffset(offset);
+  if (row === null || count === 0) return layout;
+  const { group } = layout.rowAt(row);
+  return {
+    rowCount: layout.rowCount + count,
+    rowAt(index) {
+      if (index <= row) return layout.rowAt(index);
+      if (index <= row + count) return { kind: 'child', group, offset, index: index - row - 1 };
+      return layout.rowAt(index - count);
+    },
+    rowOfOffset(target) {
+      const base = layout.rowOfOffset(target);
+      return base === null || base <= row ? base : base + count;
     },
   };
 }

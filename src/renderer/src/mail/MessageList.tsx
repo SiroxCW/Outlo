@@ -1,16 +1,29 @@
 import { makeStyles, mergeClasses, Tab, TabList, tokens } from '@fluentui/react-components';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import type { Folder, MessageFilter, MessageSummary } from '@shared/api';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import type { Folder, ListEntry, MessageFilter, MessageSummary } from '@shared/api';
+import { useCoreEvents } from '../core/events';
 import type { ListView, MessageListSource, MessageListState } from '../core/messageList';
 import { t } from '../i18n';
-import { createListLayout } from './listLayout';
+import { createListLayout, expandRow, type ListRow } from './listLayout';
 import { ListMenus } from './ListMenus';
-import { MESSAGE_ROW_HEIGHT, MessageRow } from './MessageRow';
+import { CHILD_ROW_HEIGHT, ChildRow, MESSAGE_ROW_HEIGHT, MessageRow } from './MessageRow';
 
 const HEADER_ROW_HEIGHT = 32;
+const ROW_HEIGHTS: Record<ListRow['kind'], number> = {
+  header: HEADER_ROW_HEIGHT,
+  message: MESSAGE_ROW_HEIGHT,
+  child: CHILD_ROW_HEIGHT,
+};
 const FALLBACK_NOW = new Date();
+
+interface OpenConversation {
+  threadId: number;
+  // Where its row was last seen.
+  offset: number;
+  messages: MessageSummary[];
+}
 
 const useStyles = makeStyles({
   root: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 },
@@ -59,6 +72,8 @@ const useStyles = makeStyles({
 
 interface MessageListProps {
   folder: Folder | undefined;
+  // All folders, to name the one a message of a conversation lies in.
+  folders: Folder[];
   filter: MessageFilter;
   view: ListView;
   source: MessageListSource | undefined;
@@ -75,26 +90,69 @@ export function MessageList(props: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const selectedOffset = useRef<number>(undefined);
-
-  const layout = useMemo(
-    () => createListLayout(state?.groups ?? [], collapsed),
-    [state?.groups, collapsed],
+  // The conversation whose messages are shown below its row. One at a time.
+  const [open, setOpen] = useState<OpenConversation>();
+  // The newest message of an open conversation has two rows: the conversation's and its own.
+  // Only the one the user clicked is marked.
+  const [pickedChild, setPickedChild] = useState(false);
+  const folderNames = useMemo(
+    () => new Map(props.folders.map((entry) => [entry.id, entry.name])),
+    [props.folders],
   );
+
+  // New mail moves the rows, so the row of the open conversation is looked up again.
+  const openOffset =
+    open && source
+      ? source.get(open.offset)?.threadId === open.threadId
+        ? open.offset
+        : source.offsetOfThread(open.threadId)
+      : undefined;
+  const openSize = open?.messages.length ?? 0;
+  const layout = useMemo(() => {
+    const plain = createListLayout(state?.groups ?? [], collapsed);
+    return openOffset === undefined ? plain : expandRow(plain, openOffset, openSize);
+  }, [state?.groups, collapsed, openOffset, openSize]);
   // The React Compiler is not in use, so its warning about this library does not apply.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: layout.rowCount,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) =>
-      layout.rowAt(index).kind === 'header' ? HEADER_ROW_HEIGHT : MESSAGE_ROW_HEIGHT,
+    estimateSize: (index) => ROW_HEIGHTS[layout.rowAt(index).kind],
     overscan: 6,
   });
+  // Rows can change their kind at the same position, so the sizes are worked out again.
+  useEffect(() => virtualizer.measure(), [layout, virtualizer]);
 
   // A different folder starts at the top again.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
     selectedOffset.current = undefined;
+    setOpen(undefined);
   }, [source]);
+
+  const loadConversation = useCallback(async (message: MessageSummary, offset: number) => {
+    if (message.threadId === null) return;
+    const messages = await window.outlo
+      .request('conversations.get', { messageId: message.id, folderId: message.folderId })
+      .catch(() => []);
+    setOpen(messages.length > 1 ? { threadId: message.threadId, offset, messages } : undefined);
+  }, []);
+  const toggleConversation = (message: ListEntry, offset: number) => {
+    if (open?.threadId === message.threadId) setOpen(undefined);
+    else void loadConversation(message, offset);
+  };
+  // An open conversation follows changes, like an answer that arrives.
+  useCoreEvents(
+    (event) => event.type === 'messages.changed' && open !== undefined,
+    () => {
+      if (!open) return;
+      const head = source?.get(openOffset ?? open.offset);
+      void loadConversation(
+        head?.threadId === open.threadId ? head : open.messages[0]!,
+        openOffset ?? open.offset,
+      );
+    },
+  );
 
   const toggleGroup = (key: string) =>
     setCollapsed((current) => {
@@ -103,8 +161,9 @@ export function MessageList(props: MessageListProps) {
       return next;
     });
 
-  const select = (message: MessageSummary, offset: number) => {
+  const select = (message: MessageSummary, offset: number, child = false) => {
     selectedOffset.current = offset;
+    setPickedChild(child);
     props.onSelect(message);
   };
 
@@ -193,15 +252,39 @@ export function MessageList(props: MessageListProps) {
                   </button>
                 );
               }
+              if (row.kind === 'child') {
+                const child = open!.messages[row.index]!;
+                const isHead = source?.get(row.offset)?.id === child.id;
+                return (
+                  <div key={`child-${child.id}`} className={styles.row} style={style}>
+                    <ChildRow
+                      message={child}
+                      folderName={
+                        child.folderId === folder?.id ? undefined : folderNames.get(child.folderId)
+                      }
+                      selected={child.id === selectedId && (pickedChild || !isHead)}
+                      now={state?.now ?? FALLBACK_NOW}
+                      onSelect={(selected) => select(selected, row.offset, true)}
+                    />
+                  </div>
+                );
+              }
               const message = source?.get(row.offset);
+              const expanded = message?.threadId != null && message.threadId === open?.threadId;
               return (
                 <div key={`message-${row.offset}`} className={styles.row} style={style}>
                   <MessageRow
                     message={message}
-                    selected={message !== undefined && message.id === selectedId}
+                    selected={
+                      message !== undefined &&
+                      message.id === selectedId &&
+                      !(expanded && pickedChild)
+                    }
                     showRecipient={folder?.role === 'sent' || folder?.role === 'drafts'}
                     now={state?.now ?? FALLBACK_NOW}
                     onSelect={(selected) => select(selected, row.offset)}
+                    expanded={expanded}
+                    onToggle={(entry) => toggleConversation(entry, row.offset)}
                   />
                 </div>
               );

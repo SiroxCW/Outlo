@@ -14,6 +14,7 @@ import {
   ArrowReplyAllRegular,
   ArrowReplyRegular,
   ArrowUndoRegular,
+  ChatMultipleRegular,
   ClockRegular,
   ComposeRegular,
   DeleteRegular,
@@ -97,6 +98,8 @@ interface RibbonProps {
   onTitleBar(style: TitleBarStyle): void;
   demo: boolean;
   onDemo(demo: boolean): void;
+  conversations: boolean;
+  onConversations(on: boolean): void;
 }
 
 function Group({ label, children }: { label: string; children: ReactNode }) {
@@ -222,6 +225,17 @@ export function Ribbon(props: RibbonProps) {
 
       {tab === 'view' && (
         <div className={styles.ribbon}>
+          <Group label={t('ribbon.layout')}>
+            <ToggleButton
+              size="small"
+              appearance="subtle"
+              icon={<ChatMultipleRegular />}
+              checked={props.conversations}
+              onClick={() => props.onConversations(!props.conversations)}
+            >
+              {t('ribbon.conversations')}
+            </ToggleButton>
+          </Group>
           <Group label={t('ribbon.theme')}>
             {THEME_CHOICES.map((choice) => (
               <ToggleButton

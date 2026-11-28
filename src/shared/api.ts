@@ -100,6 +100,26 @@ export interface ListOptions {
   // Stays in the list although it no longer passes the filter: the message the user has open,
   // which would otherwise vanish from an unread list the moment it is read.
   keepId?: number;
+  // One entry per conversation, as in Outlook only for a list sorted by date. The entry is the
+  // newest message of the conversation in the folder that passes the filter.
+  conversations?: boolean;
+}
+
+// A conversation is made of the messages with the same thread, in all folders of the account
+// except Deleted Items and Junk. Those two count only in their own list.
+export interface ConversationSummary {
+  size: number;
+  // Unread messages of the conversation in the folder of the list.
+  unreadCount: number;
+  isFlagged: boolean;
+  hasAttachments: boolean;
+  // Who wrote in the conversation, newest first, each once.
+  senders: Address[];
+}
+
+export interface ListEntry extends MessageSummary {
+  // Only in a list grouped into conversations.
+  conversation?: ConversationSummary;
 }
 
 export type SyncState =
@@ -123,7 +143,7 @@ export interface AccountSyncStatus {
 export interface MessagePage {
   total: number;
   offset: number;
-  messages: MessageSummary[];
+  messages: ListEntry[];
 }
 
 export type CoreRequests = {
@@ -153,6 +173,12 @@ export type CoreRequests = {
   'messages.countByGroup': {
     params: { folderId: number; filter: MessageFilter } & ListOptions;
     result: { value: string; count: number }[];
+  };
+  // The messages of the conversation a message belongs to, newest first, as seen from the list
+  // of a folder. Up to MAX_CONVERSATION_SIZE.
+  'conversations.get': {
+    params: { messageId: number; folderId: number };
+    result: MessageSummary[];
   };
   'messages.get': { params: { id: number }; result: Message | null };
   // Like messages.get, but fetches the text from the mail provider when it is not stored yet.
@@ -333,6 +359,7 @@ export interface OutloBridge {
 }
 
 export const MAX_PAGE_SIZE = 500;
+export const MAX_CONVERSATION_SIZE = 500;
 export const MAX_TIME_BOUNDARIES = 32;
 export const MAX_IMAGE_URLS = 100;
 export const TITLE_BAR_HEIGHT = 48;

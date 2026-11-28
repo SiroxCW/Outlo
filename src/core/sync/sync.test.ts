@@ -223,7 +223,7 @@ describe('message headers', () => {
     expect(subjects('Posteingang')).toEqual(['News']);
   });
 
-  it('checks the inbox every 30 seconds and other folders every 5 minutes', async () => {
+  it('checks the inbox and Sent Items every 30 seconds and other folders every 5 minutes', async () => {
     const sync = createSync();
     expect(await settle(sync)).toBeGreaterThan(1);
     graph.requests.length = 0;
@@ -234,7 +234,10 @@ describe('message headers', () => {
 
     now += 2_000;
     await settle(sync);
-    expect(graph.requests).toEqual([`GET /me/mailFolders/${inbox}/messages/delta`]);
+    expect(graph.requests).toEqual([
+      `GET /me/mailFolders/${inbox}/messages/delta`,
+      `GET /me/mailFolders/${sent}/messages/delta`,
+    ]);
 
     graph.requests.length = 0;
     now += 5 * MINUTE;

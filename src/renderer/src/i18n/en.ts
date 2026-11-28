@@ -34,6 +34,8 @@ export const en = {
   'ribbon.themeDark': 'Dark',
   'ribbon.window': 'Window',
   'ribbon.systemTitleBar': 'System title bar',
+  'ribbon.layout': 'Layout',
+  'ribbon.conversations': 'Group into conversations',
 
   'folders.favorites': 'Favorites',
   'folders.addAccount': 'Add account',
@@ -115,6 +117,8 @@ export const en = {
   'list.emptyFiltered': 'No messages match this filter',
   'list.filter': 'Filter',
   'list.sort': 'Sort',
+  'list.expand': 'Show the messages of this conversation',
+  'list.collapse': 'Hide the messages of this conversation',
 
   'filter.all': 'All',
   'filter.unread': 'Unread',

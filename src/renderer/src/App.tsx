@@ -7,7 +7,7 @@ import {
   MessageBarBody,
   tokens,
 } from '@fluentui/react-components';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Account,
   ListFilter,
@@ -28,6 +28,7 @@ import { useSettings, type Settings } from './core/useSettings';
 import { useSyncStatus } from './core/useSyncStatus';
 import { t } from './i18n';
 import { FolderPane } from './mail/FolderPane';
+import { ConversationPane } from './mail/ConversationPane';
 import { MessageList } from './mail/MessageList';
 import { formatSort, parseSort } from './mail/sorting';
 import { ReadingPane } from './mail/ReadingPane';
@@ -114,17 +115,28 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const [listWidth, setListWidth] = useState(() => Number(settings.get('listWidth', '360')));
 
   // Until the user picks a folder, show the first inbox.
-  const folders = mailboxes?.folders ?? [];
+  const folders = useMemo(() => mailboxes?.folders ?? [], [mailboxes?.folders]);
   const folder =
     folders.find((entry) => entry.id === chosenFolderId) ??
     folders.find((entry) => entry.role === 'inbox');
   const filter: MessageFilter = folder?.role === 'inbox' ? inboxFilter : 'all';
   // Each folder keeps its own sort. The filter is for the moment and ends with the folder.
-  const view: ListView = { show, sort: parseSort(settings.get(`sort.${folder?.id}`, '')) };
+  // Grouping into conversations holds for all folders, as in Outlook.
+  const conversations = settings.get('conversations', 'on') === 'on';
+  const setConversations = (on: boolean) => settings.set('conversations', on ? 'on' : 'off');
+  const view: ListView = {
+    show,
+    sort: parseSort(settings.get(`sort.${folder?.id}`, '')),
+    conversations,
+  };
   const changeView = (next: ListView) => {
     setShow(next.show);
     if (folder) settings.set(`sort.${folder.id}`, formatSort(next.sort));
   };
+  const folderNames = useMemo(
+    () => new Map(folders.map((entry) => [entry.id, entry.name])),
+    [folders],
+  );
   const { source, state } = useMessageList(folder?.id, filter, view, selectedId);
 
   const opened = useMessage(selectedId);
@@ -174,6 +186,8 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
             onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
             demo={session.demo}
             onDemo={setDemo}
+            conversations={conversations}
+            onConversations={setConversations}
             onOpenChange={setSettingsOpen}
           />
         </TitleBar>
@@ -207,6 +221,8 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                 onTitleBar={(style) => void window.outlo.window.setTitleBarStyle(style)}
                 demo={session.demo}
                 onDemo={setDemo}
+                conversations={conversations}
+                onConversations={setConversations}
               />
             )}
             {session.demo && (
@@ -288,6 +304,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                       ) : (
                         <MessageList
                           folder={folder}
+                          folders={folders}
                           filter={filter}
                           view={view}
                           source={source}
@@ -307,7 +324,17 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                       onCommit={(width) => settings.set('listWidth', String(width))}
                     />
                     <div className={styles.reading}>
-                      <ReadingPane open={{ ...opened, message }} dark={dark} />
+                      {conversations ? (
+                        <ConversationPane
+                          selected={{ ...opened, message }}
+                          dark={dark}
+                          editable={editable}
+                          listFolderId={searching ? undefined : folder?.id}
+                          folderNames={folderNames}
+                        />
+                      ) : (
+                        <ReadingPane open={{ ...opened, message }} dark={dark} />
+                      )}
                     </div>
                   </>
                 )}

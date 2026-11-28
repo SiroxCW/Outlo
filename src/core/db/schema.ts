@@ -162,4 +162,11 @@ export const MIGRATIONS: string[] = [
     DELETE FROM message_text_fts WHERE rowid = old.message_id;
   END;
   `,
+
+  // Lists grouped into conversations ask for every message whether a newer one of its
+  // conversation is in the same folder.
+  `
+  CREATE INDEX messages_by_folder_thread ON messages(folder_id, thread_id, received_at DESC,
+    id DESC);
+  `,
 ];

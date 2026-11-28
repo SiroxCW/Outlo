@@ -51,6 +51,9 @@ function listOptions(input: Record<string, unknown>): ListOptions {
     };
   }
   if (input.keepId !== undefined) options.keepId = check.id(input.keepId, 'keepId');
+  if (input.conversations !== undefined) {
+    options.conversations = check.boolean(input.conversations, 'conversations');
+  }
   return options;
 }
 
@@ -109,6 +112,14 @@ export function createCore(options: CoreOptions) {
         check.id(input.folderId, 'folderId'),
         check.oneOf(input.filter, 'filter', FILTERS),
         listOptions(input),
+      );
+    },
+
+    'conversations.get': (params) => {
+      const input = check.record(params, 'params');
+      return store.getConversation(
+        check.id(input.messageId, 'messageId'),
+        check.id(input.folderId, 'folderId'),
       );
     },
 

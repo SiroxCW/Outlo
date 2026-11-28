@@ -11,7 +11,12 @@ import {
   MenuTrigger,
   Tooltip,
 } from '@fluentui/react-components';
-import { BeakerRegular, SettingsRegular, WindowRegular } from '@fluentui/react-icons';
+import {
+  BeakerRegular,
+  ChatMultipleRegular,
+  SettingsRegular,
+  WindowRegular,
+} from '@fluentui/react-icons';
 import type { TitleBarStyle } from '@shared/api';
 import { t } from '../i18n';
 import { THEME_CHOICES, THEME_LABELS, type ThemeChoice } from '../theme';
@@ -23,6 +28,8 @@ interface SettingsMenuProps {
   onTitleBar(style: TitleBarStyle): void;
   demo: boolean;
   onDemo(demo: boolean): void;
+  conversations: boolean;
+  onConversations(on: boolean): void;
   // The menu opens over the place of a web account, which has to step aside meanwhile.
   onOpenChange(open: boolean): void;
 }
@@ -33,6 +40,7 @@ export function SettingsMenu(props: SettingsMenuProps) {
     theme: [props.theme],
     window: props.titleBar === 'native' ? ['native'] : [],
     session: props.demo ? ['demo'] : [],
+    list: props.conversations ? ['conversations'] : [],
   };
   return (
     <Menu
@@ -42,6 +50,7 @@ export function SettingsMenu(props: SettingsMenuProps) {
         if (name === 'theme') props.onTheme(checkedItems[0] as ThemeChoice);
         if (name === 'window') props.onTitleBar(on ? 'native' : 'custom');
         if (name === 'session') props.onDemo(on);
+        if (name === 'list') props.onConversations(on);
       }}
       onOpenChange={(_event, data) => props.onOpenChange(data.open)}
       positioning={{ position: 'below', align: 'end' }}
@@ -63,6 +72,9 @@ export function SettingsMenu(props: SettingsMenuProps) {
             ))}
           </MenuGroup>
           <MenuDivider />
+          <MenuItemCheckbox name="list" value="conversations" icon={<ChatMultipleRegular />}>
+            {t('ribbon.conversations')}
+          </MenuItemCheckbox>
           <MenuItemCheckbox name="window" value="native" icon={<WindowRegular />}>
             {t('ribbon.systemTitleBar')}
           </MenuItemCheckbox>

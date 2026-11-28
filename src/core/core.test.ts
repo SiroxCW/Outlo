@@ -97,6 +97,24 @@ describe('core', () => {
     expect(page.messages.every((message) => !message.isRead)).toBe(true);
   });
 
+  it('groups a list into conversations and returns each one in full', async () => {
+    const { client, inbox } = await startSeeded();
+    const query = { folderId: inbox.id, filter: 'all', conversations: true } as const;
+    const page = await client.request('messages.list', { ...query, offset: 0, limit: 500 });
+    const [counted] = await client.request('messages.countByTime', { ...query, boundaries: [] });
+    expect(page.total).toBe(counted);
+    expect(page.total).toBeLessThan(inbox.totalCount);
+
+    const long = page.messages.find((entry) => (entry.conversation?.size ?? 0) > 1)!;
+    const messages = await client.request('conversations.get', {
+      messageId: long.id,
+      folderId: inbox.id,
+    });
+    expect(messages).toHaveLength(long.conversation!.size);
+    expect(messages.every((message) => message.threadId === long.threadId)).toBe(true);
+    expect(messages[0]!.receivedAt).toBeGreaterThanOrEqual(messages.at(-1)!.receivedAt);
+  });
+
   it('creates the body of a demo message when it is first opened and keeps it', async () => {
     const { client, inbox } = await startSeeded();
     const [summary] = (
@@ -198,6 +216,10 @@ describe('core', () => {
       'sort.descending',
     );
     await expect(list({ keepId: -1 })).rejects.toThrow('keepId');
+    await expect(list({ conversations: 'yes' })).rejects.toThrow('conversations');
+    await expect(raw('conversations.get', { messageId: 1, folderId: 'x' })).rejects.toThrow(
+      'folderId',
+    );
     await expect(raw('messages.list', null)).rejects.toThrow('params');
     await expect(raw('messages.get', { id: 1.5 })).rejects.toThrow('id');
     await expect(raw('messages.setRead', { ids: 'all', isRead: true })).rejects.toThrow('ids');

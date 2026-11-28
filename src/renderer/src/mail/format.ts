@@ -40,3 +40,19 @@ export function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+// Answers and forwards carry the subject of the first message behind a prefix, in the language
+// of the sender's mail program. The topic of a conversation is the subject without them.
+const REPLY_PREFIX = /^\s*(?:re|fw|fwd|aw|wg|sv|vs|tr|rv|r)\s*(?:\[\d+\])?\s*:\s*/i;
+
+export function conversationTopic(subject: string): string {
+  let topic = subject;
+  for (
+    let next = topic.replace(REPLY_PREFIX, '');
+    next !== topic;
+    next = topic.replace(REPLY_PREFIX, '')
+  ) {
+    topic = next;
+  }
+  return topic.trim();
+}

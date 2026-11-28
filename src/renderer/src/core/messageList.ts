@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import type { ListFilter, MessageFilter, MessageSort, MessageSummary } from '@shared/api';
+import type { ListEntry, ListFilter, MessageFilter, MessageSort } from '@shared/api';
 import { createDateGroups } from '../mail/dateGroups';
 import type { ListGroup } from '../mail/listLayout';
 import { groupLabel } from '../mail/sorting';
@@ -11,7 +11,7 @@ const MAX_CACHED_PAGES = 40;
 
 interface Page {
   version: number;
-  messages: MessageSummary[];
+  messages: ListEntry[];
 }
 
 export interface MessageListState {
@@ -26,6 +26,8 @@ export interface MessageListState {
 export interface ListView {
   show: ListFilter;
   sort: MessageSort;
+  // One row per conversation, when sorted by date.
+  conversations: boolean;
 }
 
 // Holds the part of a folder that is on screen. The list can be any length, because only the
@@ -52,6 +54,7 @@ export class MessageListSource {
       filter: this.filter,
       show: this.view.show,
       sort: this.view.sort,
+      conversations: this.view.conversations,
       ...(this.keepId === undefined ? {} : { keepId: this.keepId }),
     };
   }
@@ -65,9 +68,18 @@ export class MessageListSource {
 
   // Where a message is in the list, if its page is loaded and up to date.
   offsetOf(id: number): number | undefined {
+    return this.find((message) => message.id === id);
+  }
+
+  // Where the row of a conversation is, under the same condition.
+  offsetOfThread(threadId: number): number | undefined {
+    return this.find((message) => message.threadId === threadId);
+  }
+
+  private find(test: (message: ListEntry) => boolean): number | undefined {
     for (const [pageIndex, page] of this.pages) {
       if (page.version !== this.version) continue;
-      const index = page.messages.findIndex((message) => message.id === id);
+      const index = page.messages.findIndex(test);
       if (index >= 0) return pageIndex * PAGE_SIZE + index;
     }
     return undefined;
@@ -130,7 +142,7 @@ export class MessageListSource {
   }
 
   // Returns the message at a position if it is loaded, and fetches its page if not.
-  get(offset: number): MessageSummary | undefined {
+  get(offset: number): ListEntry | undefined {
     const pageIndex = Math.floor(offset / PAGE_SIZE);
     const page = this.pages.get(pageIndex);
     if (page?.version !== this.version) this.load(pageIndex);
@@ -163,15 +175,19 @@ export class MessageListSource {
 export function useMessageList(
   folderId: number | undefined,
   filter: MessageFilter,
-  { show, sort: { field, descending } }: ListView,
+  { show, sort: { field, descending }, conversations }: ListView,
   openId: number | undefined,
 ) {
   const source = useMemo(
     () =>
       folderId === undefined
         ? undefined
-        : new MessageListSource(folderId, filter, { show, sort: { field, descending } }),
-    [folderId, filter, show, field, descending],
+        : new MessageListSource(folderId, filter, {
+            show,
+            sort: { field, descending },
+            conversations,
+          }),
+    [folderId, filter, show, field, descending, conversations],
   );
   const state = useSyncExternalStore(
     source?.subscribe ?? (() => () => undefined),

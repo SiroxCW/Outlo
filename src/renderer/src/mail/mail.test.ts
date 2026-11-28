@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDateGroups } from './dateGroups';
-import { formatListTime, formatSize } from './format';
-import { createListLayout, type ListGroup } from './listLayout';
+import { conversationTopic, formatListTime, formatSize } from './format';
+import { createListLayout, expandRow, type ListGroup } from './listLayout';
 import { DEFAULT_SORT, formatSort, groupLabel, parseSort, sortBy } from './sorting';
 
 const at = (year: number, month: number, day: number, hour = 0) =>
@@ -98,6 +98,27 @@ describe('createListLayout', () => {
     expect(createListLayout(groups, new Set(['b'])).rowOfOffset(3)).toBeNull();
   });
 
+  it('puts the messages of an open conversation below its row', () => {
+    const layout = expandRow(createListLayout(groups, new Set()), 2, 2);
+    expect(layout.rowCount).toBe(9);
+    const rows = Array.from({ length: 9 }, (_, index) => layout.rowAt(index));
+    expect(
+      rows.map((row) =>
+        row.kind === 'header' ? row.group.key : row.kind === 'child' ? `c${row.index}` : row.offset,
+      ),
+    ).toEqual(['a', 0, 1, 'b', 2, 'c0', 'c1', 3, 4]);
+    expect(rows[5]).toMatchObject({ kind: 'child', offset: 2, group: { key: 'b' } });
+    expect(layout.rowOfOffset(1)).toBe(2);
+    expect(layout.rowOfOffset(2)).toBe(4);
+    expect(layout.rowOfOffset(3)).toBe(7);
+  });
+
+  it('leaves the list as it is when the open conversation is not shown', () => {
+    const plain = createListLayout(groups, new Set(['b']));
+    expect(expandRow(plain, 3, 4)).toBe(plain);
+    expect(expandRow(plain, 0, 0)).toBe(plain);
+  });
+
   it('handles a very long list without building it', () => {
     const big = createListLayout(
       [{ key: 'x', label: 'X', count: 5_000_000, offset: 0 }],
@@ -163,5 +184,20 @@ describe('sorting', () => {
     expect(groupLabel('subject', '  ')).toBe('(No subject)');
     expect(groupLabel('importance', 'high')).toBe('High importance');
     expect(groupLabel('flag', 'unflagged')).toBe('Not flagged');
+  });
+});
+
+describe('conversationTopic', () => {
+  it('takes away the prefixes of answers and forwards, also several and in other languages', () => {
+    expect(conversationTopic('RE: Budget')).toBe('Budget');
+    expect(conversationTopic('Re: FW: re[2]: Budget')).toBe('Budget');
+    expect(conversationTopic('AW: WG: Angebot')).toBe('Angebot');
+    expect(conversationTopic('  Fwd:Plans ')).toBe('Plans');
+  });
+
+  it('leaves words alone that only start like a prefix', () => {
+    expect(conversationTopic('Review: the plan')).toBe('Review: the plan');
+    expect(conversationTopic('Reminder')).toBe('Reminder');
+    expect(conversationTopic('')).toBe('');
   });
 });

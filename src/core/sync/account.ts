@@ -7,7 +7,7 @@ import { syncMessagePage } from './messages';
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
-const INBOX_INTERVAL = 30 * SECOND;
+const OFTEN_INTERVAL = 30 * SECOND;
 const OTHER_INTERVAL = 5 * MINUTE;
 const FOLDER_LIST_INTERVAL = 5 * MINUTE;
 const ROLES_INTERVAL = 60 * MINUTE;
@@ -35,6 +35,11 @@ export interface AccountSyncOptions {
 function priority(folder: SyncFolder): number {
   const index = PRIORITY.indexOf(folder.role);
   return index === -1 ? PRIORITY.length : index;
+}
+
+// The inbox and Sent Items are checked often: both get the new messages of a conversation.
+function interval(folder: SyncFolder): number {
+  return folder.role === 'inbox' || folder.role === 'sent' ? OFTEN_INTERVAL : OTHER_INTERVAL;
 }
 
 // Keeps one account up to date. It works in small steps, one request each, so news in the
@@ -187,9 +192,10 @@ export class AccountSync {
     // A folder that reached its end is checked again after its interval. One with waiting pages
     // comes after the checks that are due, so news always wins over old mail.
     const due = folders.find((folder) => {
-      const interval = folder.role === 'inbox' ? INBOX_INTERVAL : OTHER_INTERVAL;
       const checked = this.checkedAt.get(folder.id);
-      return folder.syncPending === 0 && (checked === undefined || now - checked >= interval);
+      return (
+        folder.syncPending === 0 && (checked === undefined || now - checked >= interval(folder))
+      );
     });
     const folder = due ?? folders.find((entry) => entry.syncPending !== 0);
 
@@ -200,10 +206,9 @@ export class AccountSync {
         return 0;
       }
       this.setState('idle');
-      const nextCheck = folders.map((entry) => {
-        const interval = entry.role === 'inbox' ? INBOX_INTERVAL : OTHER_INTERVAL;
-        return (this.checkedAt.get(entry.id) ?? now) + interval;
-      });
+      const nextCheck = folders.map(
+        (entry) => (this.checkedAt.get(entry.id) ?? now) + interval(entry),
+      );
       const next = Math.min(this.foldersAt + FOLDER_LIST_INTERVAL, ...nextCheck);
       return Math.max(next - now, SECOND);
     }

@@ -488,6 +488,125 @@ describe('sorting', () => {
   });
 });
 
+describe('conversations', () => {
+  const grouped = { conversations: true } as const;
+  const list = (options: ListOptions = grouped, filter: MessageFilter = 'all') =>
+    store.listMessages(inbox, filter, 0, 50, options);
+  const ids = (options?: ListOptions, filter?: MessageFilter) =>
+    list(options, filter).messages.map((entry) => entry.id);
+  let sent: number;
+  let deleted: number;
+  let junk: number;
+
+  beforeEach(() => {
+    const base = { accountId, parentId: null, isFavorite: false, sortOrder: 2 };
+    sent = store.insertFolder({ ...base, name: 'Sent Items', role: 'sent' });
+    deleted = store.insertFolder({ ...base, name: 'Deleted Items', role: 'deleted' });
+    junk = store.insertFolder({ ...base, name: 'Junk Email', role: 'junk' });
+  });
+
+  it('shows each conversation once, as its newest message in the folder', () => {
+    const thread = store.insertThread(accountId);
+    const first = add({ threadId: thread, receivedAt: 100 });
+    const answer = add({ threadId: thread, receivedAt: 300 });
+    const alone = add({ threadId: null, receivedAt: 200 });
+    const other = add({ threadId: store.insertThread(accountId), receivedAt: 50 });
+    // A newer message of the conversation in another folder does not take the place.
+    add({ threadId: thread, folderId: sent, receivedAt: 400 });
+
+    expect(ids()).toEqual([answer, alone, other]);
+    expect(list().total).toBe(3);
+    expect(store.countByTime(inbox, 'all', [250], grouped)).toEqual([1, 2]);
+    expect(ids({})).toEqual([answer, alone, first, other]);
+    // Only a list sorted by date is grouped, as in Outlook.
+    const bySender = { ...grouped, sort: { field: 'from', descending: false } } as const;
+    expect(list(bySender).messages).toHaveLength(4);
+    expect(list(bySender).messages[0]?.conversation).toBeUndefined();
+  });
+
+  it('picks the newest message that passes the tab and the filter', () => {
+    const thread = store.insertThread(accountId);
+    const unread = add({ threadId: thread, receivedAt: 100 });
+    const read = add({ threadId: thread, receivedAt: 200, isRead: true });
+    const other = add({ threadId: thread, receivedAt: 300, isFocused: false, isRead: true });
+    expect(ids({ ...grouped, show: 'unread' })).toEqual([unread]);
+    expect(ids(grouped, 'focused')).toEqual([read]);
+    expect(ids(grouped, 'other')).toEqual([other]);
+    // The open message keeps its conversation in the list after it was read.
+    store.setRead([unread], true);
+    expect(ids({ ...grouped, show: 'unread' })).toEqual([]);
+    expect(ids({ ...grouped, show: 'unread', keepId: unread })).toEqual([unread]);
+    expect(list({ ...grouped, show: 'unread', keepId: unread }).total).toBe(1);
+    expect(list({ ...grouped, show: 'flagged' }).total).toBe(0);
+  });
+
+  it('sums up the conversation for the row', () => {
+    const thread = store.insertThread(accountId);
+    const anna = { name: 'Anna Berg', address: 'anna@x.example' };
+    add({ threadId: thread, receivedAt: 100, from: anna, isRead: true, hasAttachments: true });
+    add({ threadId: thread, receivedAt: 200, from: { name: 'Ben', address: 'ben@x.example' } });
+    add({ threadId: thread, receivedAt: 300, from: { ...anna, address: 'ANNA@x.example' } });
+    add({ threadId: thread, folderId: sent, receivedAt: 250, isRead: false, isFlagged: true });
+    // Deleted Items and Junk stay out of the conversation in the inbox.
+    add({ threadId: thread, folderId: deleted, receivedAt: 500, isRead: false });
+    add({ threadId: thread, folderId: junk, receivedAt: 600, hasAttachments: true });
+
+    expect(list().messages[0]?.conversation).toEqual({
+      size: 4,
+      unreadCount: 2,
+      isFlagged: true,
+      hasAttachments: true,
+      // Newest first, each address once whatever its case.
+      senders: [
+        { name: 'Anna Berg', address: 'ANNA@x.example' },
+        { name: 'Anna Berg', address: 'anna.berg@bluepeak.example' },
+        { name: 'Ben', address: 'ben@x.example' },
+      ],
+    });
+    // In Deleted Items the deleted message is part of it.
+    const inDeleted = store.listMessages(deleted, 'all', 0, 10, grouped).messages[0];
+    expect(inDeleted?.conversation?.size).toBe(5);
+  });
+
+  it('describes a message without a conversation by itself', () => {
+    add({ threadId: null, isRead: false, isFlagged: true });
+    expect(list().messages[0]?.conversation).toEqual({
+      size: 1,
+      unreadCount: 1,
+      isFlagged: true,
+      hasAttachments: false,
+      senders: [{ name: 'Anna Berg', address: 'anna.berg@bluepeak.example' }],
+    });
+  });
+
+  it('returns the whole conversation, newest first', () => {
+    const thread = store.insertThread(accountId);
+    const first = add({ threadId: thread, receivedAt: 100 });
+    const reply = add({ threadId: thread, folderId: sent, receivedAt: 200 });
+    const binned = add({ threadId: thread, folderId: deleted, receivedAt: 300 });
+    const alone = add({ threadId: null });
+    const ofConversation = (id: number, folderId = inbox) =>
+      store.getConversation(id, folderId).map((entry) => entry.id);
+
+    expect(ofConversation(first)).toEqual([reply, first]);
+    expect(ofConversation(binned, deleted)).toEqual([binned, reply, first]);
+    expect(ofConversation(alone)).toEqual([alone]);
+    expect(ofConversation(9_999)).toEqual([]);
+  });
+
+  it('finds the newer message of a conversation through an index', () => {
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT m.id FROM messages m WHERE m.folder_id = ? AND NOT EXISTS (
+           SELECT 1 FROM messages n WHERE n.folder_id = m.folder_id AND n.thread_id = m.thread_id
+             AND (n.received_at > m.received_at OR (n.received_at = m.received_at AND n.id > m.id)))
+         ORDER BY m.received_at DESC LIMIT 100`,
+      )
+      .all(inbox);
+    expect(plan.map((row) => row.detail).join(' ')).toContain('messages_by_folder_thread');
+  });
+});
+
 describe('listSettings', () => {
   it('returns only the settings below a prefix', () => {
     store.setSetting('ui.theme', 'dark');

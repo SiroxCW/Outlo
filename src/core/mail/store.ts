@@ -3,10 +3,12 @@ import type {
   Account,
   Address,
   Attachment,
+  ConversationSummary,
   Folder,
   FolderRole,
   Importance,
   InlineImage,
+  ListEntry,
   ListFilter,
   ListOptions,
   Message,
@@ -17,6 +19,7 @@ import type {
   MessageSummary,
   SortField,
 } from '@shared/api';
+import { MAX_CONVERSATION_SIZE } from '@shared/api';
 import { transaction, type Database } from '../db/database';
 import type { RemoteMessage } from '../graph/mapping';
 import { toFtsTerms } from './fts-query';
@@ -159,16 +162,23 @@ function toAttachment(row: Row): Attachment {
   };
 }
 
-// The conditions of the Filter menu. "To me" means on the To line; a copy (Cc) does not count.
-const SHOW: Record<ListFilter, string | null> = {
+// The conditions of the Filter menu, for the messages table under the given name. "To me" means
+// on the To line; a copy (Cc) does not count.
+const SHOW: Record<ListFilter, ((table: string) => string) | null> = {
   all: null,
-  unread: 'm.is_read = 0',
-  flagged: 'm.is_flagged = 1',
-  hasFiles: 'm.has_attachments = 1',
-  toMe: `EXISTS (
-    SELECT 1 FROM json_each(m.to_recipients) r JOIN accounts a ON a.id = m.account_id
+  unread: (table) => `${table}.is_read = 0`,
+  flagged: (table) => `${table}.is_flagged = 1`,
+  hasFiles: (table) => `${table}.has_attachments = 1`,
+  toMe: (table) => `EXISTS (
+    SELECT 1 FROM json_each(${table}.to_recipients) r JOIN accounts a ON a.id = ${table}.account_id
     WHERE lower(json_extract(r.value, '$.address')) = lower(a.email))`,
 };
+
+// The messages of a conversation as seen from a folder (parameter): Deleted Items and Junk only
+// count in their own list. Needs the messages table as m and its folders as f.
+const CONVERSATION_SCOPE =
+  "(f.role IS NULL OR f.role NOT IN ('deleted', 'junk') OR m.folder_id = ?)";
+const MAX_SENDERS = 5;
 
 // What a list sorted by a field is grouped by. The list is ordered by the same expression, so
 // the groups and the list agree. Case does not split a group.
@@ -179,6 +189,29 @@ export const GROUP_KEYS: Record<Exclude<SortField, 'date'>, string> = {
   flag: 'm.is_flagged',
 };
 
+function groupsConversations(options: ListOptions): boolean {
+  return options.conversations === true && (options.sort?.field ?? 'date') === 'date';
+}
+
+// Whether a message of the table under the given name passes the tab and the filter.
+function passes(
+  table: string,
+  filter: MessageFilter,
+  options: ListOptions,
+): { condition: string; params: SQLInputValue[] } {
+  const parts = ['1'];
+  const params: SQLInputValue[] = [];
+  if (filter !== 'all') parts.push(`${table}.is_focused = ${filter === 'focused' ? 1 : 0}`);
+  const condition = SHOW[options.show ?? 'all']?.(table);
+  if (condition && options.keepId !== undefined) {
+    parts.push(`(${condition} OR ${table}.id = ?)`);
+    params.push(options.keepId);
+  } else if (condition) {
+    parts.push(condition);
+  }
+  return { condition: parts.join(' AND '), params };
+}
+
 // Which messages of a folder a list shows. Only fixed parts of SQL are put together here; every
 // value is a parameter.
 function listWhere(
@@ -186,15 +219,17 @@ function listWhere(
   filter: MessageFilter,
   options: ListOptions,
 ): { where: string; params: SQLInputValue[] } {
-  const parts = ['m.folder_id = ?'];
-  const params: SQLInputValue[] = [folderId];
-  if (filter !== 'all') parts.push(`m.is_focused = ${filter === 'focused' ? 1 : 0}`);
-  const condition = SHOW[options.show ?? 'all'];
-  if (condition && options.keepId !== undefined) {
-    parts.push(`(${condition} OR m.id = ?)`);
-    params.push(options.keepId);
-  } else if (condition) {
-    parts.push(condition);
+  const own = passes('m', filter, options);
+  const parts = ['m.folder_id = ?', own.condition];
+  const params: SQLInputValue[] = [folderId, ...own.params];
+  if (groupsConversations(options)) {
+    // A conversation shows as its newest message in the folder that passes the filter.
+    const newer = passes('n', filter, options);
+    parts.push(`(m.thread_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM messages n WHERE n.folder_id = m.folder_id AND n.thread_id = m.thread_id
+        AND (n.received_at > m.received_at OR (n.received_at = m.received_at AND n.id > m.id))
+        AND ${newer.condition}))`);
+    params.push(...newer.params);
   }
   return { where: parts.join(' AND '), params };
 }
@@ -257,14 +292,91 @@ export class MailStore {
     options: ListOptions = {},
   ): MessagePage {
     const { where, params } = listWhere(folderId, filter, options);
-    const count = this.sql(`SELECT count(*) AS total FROM messages m WHERE ${where}`).get(
-      ...params,
+    const grouped = groupsConversations(options);
+    // Every conversation with a message that passes has one entry, so counting conversations
+    // gives the same number. It is three times faster than asking each message.
+    const counted = grouped
+      ? listWhere(folderId, filter, { ...options, conversations: false })
+      : { where, params };
+    const what = grouped ? 'count(DISTINCT coalesce(m.thread_id, -m.id))' : 'count(*)';
+    const count = this.sql(`SELECT ${what} AS total FROM messages m WHERE ${counted.where}`).get(
+      ...counted.params,
     ) as { total: number };
     const rows = this.sql(
       `SELECT ${SUMMARY_COLUMNS} FROM messages m WHERE ${where}
        ORDER BY ${orderBy(options.sort)} LIMIT ? OFFSET ?`,
     ).all(...params, limit, offset);
-    return { total: count.total, offset, messages: rows.map(toSummary) };
+    const messages = rows.map(toSummary);
+    return {
+      total: count.total,
+      offset,
+      messages: grouped ? this.withConversations(folderId, messages) : messages,
+    };
+  }
+
+  // Adds to each message what the list shows of its conversation.
+  private withConversations(folderId: number, messages: MessageSummary[]): ListEntry[] {
+    const threadIds = JSON.stringify([
+      ...new Set(messages.flatMap((message) => message.threadId ?? [])),
+    ]);
+    const inThreads = `m.thread_id IN (SELECT value FROM json_each(?)) AND ${CONVERSATION_SCOPE}`;
+    const totals = new Map(
+      this.sql(
+        `SELECT m.thread_id, count(*) AS size, sum(m.folder_id = ? AND m.is_read = 0) AS unread,
+           max(m.is_flagged) AS flagged, max(m.has_attachments) AS files
+         FROM messages m JOIN folders f ON f.id = m.folder_id WHERE ${inThreads}
+         GROUP BY m.thread_id`,
+      )
+        .all(folderId, threadIds, folderId)
+        .map((row) => [row.thread_id as number, row]),
+    );
+    const senders = new Map<number, Address[]>();
+    const rows = this.sql(
+      `SELECT m.thread_id, m.from_name, m.from_address
+       FROM messages m JOIN folders f ON f.id = m.folder_id WHERE ${inThreads}
+       ORDER BY m.thread_id, m.received_at DESC, m.id DESC`,
+    ).all(threadIds, folderId);
+    for (const row of rows) {
+      const list = senders.get(row.thread_id as number) ?? [];
+      const address = row.from_address as string;
+      const known = list.some((entry) => entry.address.toLowerCase() === address.toLowerCase());
+      if (!known && list.length < MAX_SENDERS)
+        list.push({ name: row.from_name as string, address });
+      senders.set(row.thread_id as number, list);
+    }
+
+    return messages.map((message) => {
+      const total = message.threadId === null ? undefined : totals.get(message.threadId);
+      const conversation: ConversationSummary = total
+        ? {
+            size: total.size as number,
+            unreadCount: total.unread as number,
+            isFlagged: total.flagged === 1,
+            hasAttachments: total.files === 1,
+            senders: senders.get(message.threadId!) ?? [message.from],
+          }
+        : {
+            size: 1,
+            unreadCount: message.isRead ? 0 : 1,
+            isFlagged: message.isFlagged,
+            hasAttachments: message.hasAttachments,
+            senders: [message.from],
+          };
+      return { ...message, conversation };
+    });
+  }
+
+  // The conversation of a message as seen from the list of a folder, newest first.
+  getConversation(messageId: number, folderId: number): MessageSummary[] {
+    return this.sql(
+      `SELECT ${SUMMARY_COLUMNS} FROM messages m JOIN folders f ON f.id = m.folder_id
+       WHERE m.id = ?1 OR (
+         m.thread_id = (SELECT thread_id FROM messages WHERE id = ?1)
+         AND (f.role IS NULL OR f.role NOT IN ('deleted', 'junk') OR m.folder_id = ?2))
+       ORDER BY m.received_at DESC, m.id DESC LIMIT ?3`,
+    )
+      .all(messageId, folderId, MAX_CONVERSATION_SIZE)
+      .map(toSummary);
   }
 
   countByTime(
