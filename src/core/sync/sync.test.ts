@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Folder } from '@shared/api';
 import { LOG_LINE, setUpLog } from '@shared/log';
 import { openDatabase } from '../db/database';
@@ -399,14 +399,188 @@ describe('problems', () => {
     expect(sync.status()).toEqual({ accountId, state: 'error', message: 'Something broke' });
     expect(subjects('Posteingang')).toEqual(['Safe']);
   });
+});
 
-  it('does not let the user change synced mail yet', async () => {
+describe('changes made here', () => {
+  const stored = (name: string) => store.listMessages(folder(name).id, 'all', 0, 500).messages;
+  const localId = (remoteId: string) =>
+    stored('Posteingang').find(
+      (message) => store.getRemoteMessage(message.id)?.remoteId === remoteId,
+    )!.id;
+  const patches = () => graph.requests.filter((request) => request.startsWith('PATCH '));
+  const refuse = (status: number, code = 'Test') => {
+    graph.intercept = (_url, method) =>
+      method === 'PATCH'
+        ? new Response(JSON.stringify({ error: { code, message: 'No' } }), { status })
+        : undefined;
+  };
+
+  it('sends read and flag to the server, which then reports them back', async () => {
+    const ids = Array.from({ length: 25 }, () => graph.addMessage(inbox));
+    const sync = createSync();
+    await settle(sync);
+    const all = stored('Posteingang').map((message) => message.id);
+    const newest = ids.at(-1)!;
+
+    expect(store.setRead(all, true)).toEqual([folder('Posteingang').id]);
+    store.setFlagged([localId(newest)], true);
+    expect(folder('Posteingang').unreadCount).toBe(0);
+    await settle(sync);
+
+    expect(patches()).toHaveLength(26);
+    expect(ids.every((id) => graph.find(id)!.isRead)).toBe(true);
+    expect(graph.find(newest)!.flag).toEqual({ flagStatus: 'flagged' });
+    expect(store.hasOperations(accountId)).toBe(false);
+
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(stored('Posteingang').every((message) => message.isRead)).toBe(true);
+    expect(folder('Posteingang').unreadCount).toBe(0);
+  });
+
+  it('sends a change right away instead of at the next check', async () => {
+    const first = graph.addMessage(inbox);
+    const second = graph.addMessage(inbox);
+    const sync = createSync();
+    const running = sync.run();
+    await vi.waitFor(() => expect(sync.status().state).toBe('idle'));
+
+    store.setRead([localId(first)], true);
+    sync.wake();
+    await vi.waitFor(() => expect(graph.find(first)!.isRead).toBe(true));
+
+    // Also when the change comes while a step runs that ends in a wait, here after an error.
+    graph.intercept = (url) => {
+      if (!url.pathname.endsWith('/delta') || store.hasOperations(accountId)) return undefined;
+      if (graph.find(second)!.isRead) return undefined;
+      store.setRead([localId(second)], true);
+      sync.wake();
+      return new Response('{}', { status: 500 });
+    };
+    sync.syncNow();
+    await vi.waitFor(() => expect(graph.find(second)!.isRead).toBe(true));
+    sync.stop();
+    await running;
+  });
+
+  it('keeps a change the server does not know yet, also in the counters', async () => {
+    const id = graph.addMessage(inbox);
     graph.addMessage(inbox);
+    const sync = createSync();
+    await settle(sync);
+
+    refuse(503);
+    store.setRead([localId(id)], true);
+    await sync.stepSafely();
+    expect(store.hasOperations(accountId)).toBe(true);
+
+    // The server reports the message again, still unread, and counts it so.
+    graph.updateMessage(inbox, id, { subject: 'Changed' });
+    now += 6 * MINUTE;
+    await settle(sync);
+    expect(store.getMessage(localId(id))).toMatchObject({ subject: 'Changed', isRead: true });
+    expect(folder('Posteingang').unreadCount).toBe(1);
+
+    graph.intercept = undefined;
+    now += MINUTE;
+    await settle(sync);
+    expect(graph.find(id)!.isRead).toBe(true);
+    expect(store.hasOperations(accountId)).toBe(false);
+    expect(folder('Posteingang').unreadCount).toBe(1);
+  });
+
+  it('waits without a connection and sends after a restart, the last change of each kind', async () => {
+    const id = graph.addMessage(inbox);
     await settle(createSync());
-    const [message] = store.listMessages(folder('Posteingang').id, 'all', 0, 10).messages;
-    expect(store.setRead([message!.id], true)).toEqual([]);
-    expect(store.setFlagged([message!.id], true)).toEqual([]);
-    expect(store.getMessage(message!.id)).toMatchObject({ isRead: false, isFlagged: false });
+    const message = localId(id);
+
+    graph.offline = true;
+    store.setRead([message], true);
+    store.setRead([message], false);
+    store.setRead([message], true);
+    store.setFlagged([message], true);
+    const before = createSync();
+    expect(await before.stepSafely()).toBeGreaterThan(0);
+    expect(before.status().state).toBe('offline');
+    expect(store.listDueOperations(accountId, now, 10)).toMatchObject([
+      { kind: 'read', value: true, before: false },
+      { kind: 'flag', value: true, before: false },
+    ]);
+
+    graph.offline = false;
+    graph.requests.length = 0;
+    await settle(createSync());
+    expect(patches()).toHaveLength(2);
+    expect(graph.find(id)).toMatchObject({ isRead: true, flag: { flagStatus: 'flagged' } });
+    expect(store.getMessage(message)).toMatchObject({ isRead: true, isFlagged: true });
+  });
+
+  it('undoes a change the server refuses', async () => {
+    const id = graph.addMessage(inbox);
+    graph.addMessage(inbox);
+    const sync = createSync();
+    await settle(sync);
+
+    refuse(403, 'ErrorAccessDenied');
+    store.setRead([localId(id)], true);
+    expect(folder('Posteingang').unreadCount).toBe(1);
+    events = [];
+    await sync.stepSafely();
+
+    expect(store.getMessage(localId(id))!.isRead).toBe(false);
+    expect(folder('Posteingang').unreadCount).toBe(2);
+    expect(store.hasOperations(accountId)).toBe(false);
+    expect(events).toEqual([`messages:${folder('Posteingang').id}`, 'folders']);
+    expect(graph.find(id)!.isRead).toBe(false);
+  });
+
+  it('gives up a change after many tries that failed for a while', async () => {
+    const id = graph.addMessage(inbox);
+    const sync = createSync();
+    await settle(sync);
+
+    refuse(503);
+    store.setFlagged([localId(id)], true);
+    for (let round = 0; round < 10; round++) {
+      now += 11 * MINUTE;
+      await sync.stepSafely();
+    }
+    expect(store.hasOperations(accountId)).toBe(false);
+    expect(store.getMessage(localId(id))!.isFlagged).toBe(false);
+  });
+
+  it('drops a change of a message that is gone at the server', async () => {
+    const id = graph.addMessage(inbox);
+    const sync = createSync();
+    await settle(sync);
+
+    graph.removeMessage(inbox, id);
+    store.setRead([localId(id)], true);
+    await sync.stepSafely();
+    expect(store.hasOperations(accountId)).toBe(false);
+    now += 31_000;
+    await settle(sync);
+    expect(stored('Posteingang')).toEqual([]);
+  });
+
+  it('sends a newer change that came in while the last one was on its way', async () => {
+    const id = graph.addMessage(inbox);
+    const sync = createSync();
+    await settle(sync);
+    const message = localId(id);
+
+    // The user marks the message unread again while the server gets the first change.
+    graph.intercept = (_url, method) => {
+      if (method === 'PATCH' && patches().length === 1) store.setRead([message], false);
+      return undefined;
+    };
+    store.setRead([message], true);
+    await settle(sync);
+
+    expect(patches()).toHaveLength(2);
+    expect(graph.find(id)!.isRead).toBe(false);
+    expect(store.getMessage(message)!.isRead).toBe(false);
+    expect(store.hasOperations(accountId)).toBe(false);
   });
 });
 
@@ -586,6 +760,8 @@ describe('log', () => {
           : undefined;
       const sync = createSync();
       await settle(sync);
+      const [unread] = store.listMessages(folder('Posteingang').id, 'all', 0, 10).messages;
+      store.setRead([unread!.id], true);
       graph.intercept = () =>
         new Response(
           JSON.stringify({
@@ -598,11 +774,13 @@ describe('log', () => {
         );
       now += 6 * MINUTE;
       await sync.stepSafely();
+      await sync.stepSafely();
       expect(sync.status().state).toBe('error');
 
       const text = lines.join('\n');
       expect(text).toContain('Microsoft Graph asked to wait');
       expect(text).toContain('Read a page of a folder');
+      expect(text).toMatch(/A change was refused and undone here .*code=ErrorAccessDenied/);
       expect(text).toMatch(
         /The sync stopped account=\d+ state=error before=idle .*code=ErrorAccessDenied/,
       );

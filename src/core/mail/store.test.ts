@@ -190,6 +190,13 @@ describe('setRead', () => {
     expect(folder(inbox).unreadCount).toBe(0);
     expect(folder(archive).unreadCount).toBe(0);
   });
+
+  it('queues nothing for mail without a provider', () => {
+    const a = add();
+    store.setRead([a], true);
+    store.setFlagged([a], true);
+    expect(store.hasOperations(accountId)).toBe(false);
+  });
 });
 
 describe('setFlagged', () => {

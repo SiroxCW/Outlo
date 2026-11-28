@@ -37,7 +37,7 @@ export class FakeGraph {
   // When false, the folder list only holds the top level, and children have to be asked for.
   nestedFolderList = true;
   // Lets a test answer a request itself, for example with an error.
-  intercept: ((url: URL) => Response | undefined) | undefined;
+  intercept: ((url: URL, method: string) => Response | undefined) | undefined;
   offline = false;
   private readonly folders = new Map<string, FakeFolder>();
   private readonly changes: Change[] = [];
@@ -106,6 +106,15 @@ export class FakeGraph {
     return id;
   }
 
+  // The message as the server has it now, in whichever folder.
+  find(id: string): GraphMessage | undefined {
+    for (const folder of this.folders.values()) {
+      const message = folder.messages.get(id);
+      if (message) return message;
+    }
+    return undefined;
+  }
+
   updateMessage(folderId: string, id: string, changes: Partial<GraphMessage>): void {
     const messages = this.folders.get(folderId)!.messages;
     messages.set(id, { ...messages.get(id)!, ...changes });
@@ -137,7 +146,8 @@ export class FakeGraph {
   readonly fetch: Fetch = async (address, init) => {
     const url = new URL(address);
     const path = decodeURIComponent(url.pathname.replace('/v1.0', ''));
-    this.requests.push(`${init.method ?? 'GET'} ${path}`);
+    const method = init.method ?? 'GET';
+    this.requests.push(`${method} ${path}`);
     if (this.offline) throw new TypeError('fetch failed');
 
     const headers = init.headers as Record<string, string>;
@@ -147,7 +157,7 @@ export class FakeGraph {
     if (!headers.Prefer?.includes('IdType="ImmutableId"')) {
       return failure(400, 'Test', 'Immutable IDs were not requested');
     }
-    const intercepted = this.intercept?.(url);
+    const intercepted = this.intercept?.(url, method);
     if (intercepted) return intercepted;
 
     if (path === '/$batch') return this.batch(JSON.parse(init.body as string));
@@ -170,6 +180,9 @@ export class FakeGraph {
       return this.messageDelta(url, messages[1]!, size);
     }
     const single = /^\/me\/messages\/([^/]+)(\/attachments(?:\/([^/]+)\/\$value)?)?$/.exec(path);
+    if (single && method === 'PATCH' && !single[2]) {
+      return this.patch(single[1]!, JSON.parse(init.body as string) as Record<string, unknown>);
+    }
     if (single) return this.message(single[1]!, single[2] !== undefined, single[3]);
     return failure(404, 'Test', `The fake does not know ${path}`);
   };
@@ -202,6 +215,16 @@ export class FakeGraph {
     // As with Graph, pictures inside the text alone do not count as attachments.
     const hasAttachments = attachments.some((entry) => !entry.isInline);
     return json(200, { id, body, hasAttachments });
+  }
+
+  // Sets what the app may change about a message. Anything else is refused, as a mistake.
+  private patch(id: string, changes: Record<string, unknown>): Response {
+    const folder = [...this.folders.values()].find((entry) => entry.messages.has(id));
+    if (!folder) return failure(404, 'ErrorItemNotFound', 'The message does not exist');
+    const unknown = Object.keys(changes).filter((key) => key !== 'isRead' && key !== 'flag');
+    if (unknown.length > 0) return failure(400, 'ErrorInvalidProperty', unknown.join(', '));
+    this.updateMessage(folder.id, id, changes as Partial<GraphMessage>);
+    return json(200, folder.messages.get(id));
   }
 
   private toFolder(folder: FakeFolder): GraphFolder {

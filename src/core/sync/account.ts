@@ -5,6 +5,7 @@ import type { MailStore, SyncFolder } from '../mail/store';
 import { fetchBody } from './bodies';
 import { fetchFolders, fetchRoles, toRemoteFolders } from './folders';
 import { syncMessagePage } from './messages';
+import { sendOperations } from './operations';
 
 const log = createLog('sync');
 const SECOND = 1000;
@@ -61,6 +62,8 @@ export class AccountSync {
   private readonly bodiesLoading = new Map<number, Promise<void>>();
   private failures = 0;
   private stopped = false;
+  // Set when there is new work while a step runs, so the next step does not wait.
+  private woken = false;
   private wakeUp: (() => void) | undefined;
 
   constructor(private readonly options: AccountSyncOptions) {
@@ -74,8 +77,9 @@ export class AccountSync {
   // Runs until stop() is called.
   async run(): Promise<void> {
     while (!this.stopped) {
+      this.woken = false;
       const wait = await this.stepSafely();
-      if (wait > 0 && !this.stopped) await this.pause(wait);
+      if (wait > 0 && !this.stopped && !this.woken) await this.pause(wait);
     }
   }
 
@@ -125,6 +129,15 @@ export class AccountSync {
   syncNow(): void {
     this.foldersAt = undefined;
     this.checkedAt.clear();
+    this.woken = true;
+    this.wakeUp?.();
+  }
+
+  // Sends the changes the user made now instead of at the next check. Not while the sign-in is
+  // needed: that waits for the user.
+  wake(): void {
+    if (this.state === 'signInNeeded' || this.state === 'noMailbox') return;
+    this.woken = true;
     this.wakeUp?.();
   }
 
@@ -185,6 +198,17 @@ export class AccountSync {
     const { accountId, client, store, events } = this.options;
     const now = this.now();
 
+    // Changes the user made go first, so the provider has them before the next check.
+    const sent = await sendOperations(client, store, accountId, now);
+    if (sent) {
+      if (sent.changedFolderIds.length > 0) {
+        events.messagesChanged(sent.changedFolderIds);
+        events.foldersChanged();
+      }
+      if (sent.error) throw sent.error;
+      return 0;
+    }
+
     if (this.foldersAt === undefined || now - this.foldersAt >= FOLDER_LIST_INTERVAL) {
       if (!this.roles || now - this.rolesAt >= ROLES_INTERVAL) {
         this.roles = await fetchRoles(client);
@@ -223,7 +247,11 @@ export class AccountSync {
       const nextCheck = folders.map(
         (entry) => (this.checkedAt.get(entry.id) ?? now) + interval(entry),
       );
-      const next = Math.min(this.foldersAt + FOLDER_LIST_INTERVAL, ...nextCheck);
+      const next = Math.min(
+        this.foldersAt + FOLDER_LIST_INTERVAL,
+        store.nextOperationAt(accountId) ?? Infinity,
+        ...nextCheck,
+      );
       return Math.max(next - now, SECOND);
     }
 

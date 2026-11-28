@@ -112,6 +112,13 @@ export class SyncEngine {
     for (const sync of this.accounts.values()) sync.syncNow();
   }
 
+  // Sends the changes the user just made, instead of at the next check.
+  sendChanges(): void {
+    for (const [accountId, sync] of this.accounts) {
+      if (this.options.store.hasOperations(accountId)) sync.wake();
+    }
+  }
+
   stop(): void {
     for (const sync of this.accounts.values()) sync.stop();
     this.accounts.clear();

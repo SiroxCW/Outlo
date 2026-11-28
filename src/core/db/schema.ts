@@ -169,4 +169,24 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX messages_by_folder_thread ON messages(folder_id, thread_id, received_at DESC,
     id DESC);
   `,
+
+  // Changes the user made here that still have to reach the provider. They are applied here at
+  // once and wait in this table until the provider took them, also across a restart. remote_id
+  // names the message at the provider, which stays the same when it moves. data is JSON with
+  // what the change sets and what the provider had before, which comes back if it refuses.
+  // next_attempt_at is a time in milliseconds, 0 means now.
+  `
+  CREATE TABLE operations (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    remote_id TEXT,
+    data TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX operations_by_account ON operations(account_id, next_attempt_at);
+  CREATE INDEX operations_by_remote_id ON operations(account_id, remote_id, kind);
+  `,
 ];

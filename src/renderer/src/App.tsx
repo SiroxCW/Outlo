@@ -142,16 +142,17 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
   const opened = useMessage(selectedId);
   const message = selectedId === undefined ? null : opened.message;
 
-  // Opening an unread message marks it as read, once. The user can mark it unread again.
-  // Changes are not sent to mail providers yet, so only demo mail can be changed for now.
-  const provider = mailboxes?.accounts.find((entry) => entry.id === message?.accountId)?.provider;
-  const editable = provider === 'demo';
-  const markedAsRead = useRef<number>(undefined);
+  // Opening an unread message marks it as read, once per opening. While it stays open, the user
+  // can mark it unread and it stays so.
+  const openedId = useRef<number>(undefined);
   useEffect(() => {
-    if (!message || !editable || message.isRead || markedAsRead.current === message.id) return;
-    markedAsRead.current = message.id;
-    void window.outlo.request('messages.setRead', { ids: [message.id], isRead: true });
-  }, [message, editable]);
+    if (selectedId === undefined) openedId.current = undefined;
+    if (!message || openedId.current === message.id) return;
+    openedId.current = message.id;
+    if (!message.isRead) {
+      void window.outlo.request('messages.setRead', { ids: [message.id], isRead: true });
+    }
+  }, [message, selectedId]);
 
   const searching = search.trim() !== '';
   // An account in web mode is shown when the user picked it, or when there is no mail to show.
@@ -205,7 +206,7 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
             {/* Outlook on the web brings its own ribbon, and this one would do nothing for it. */}
             {!webAccount && (
               <Ribbon
-                message={editable ? message : null}
+                message={message}
                 theme={themeChoice}
                 titleBar={titleBar}
                 onToggleFolders={() => setFoldersVisible((visible) => !visible)}
@@ -328,7 +329,6 @@ function Shell({ settings, session }: { settings: Settings; session: SessionInfo
                         <ConversationPane
                           selected={{ ...opened, message }}
                           dark={dark}
-                          editable={editable}
                           listFolderId={searching ? undefined : folder?.id}
                           folderNames={folderNames}
                         />

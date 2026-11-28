@@ -51,8 +51,6 @@ interface ConversationPaneProps {
   // The message the user picked, in the list or below an open conversation.
   selected: OpenMessage;
   dark: boolean;
-  // Whether opening a message may mark it as read. Only mail without a provider can change yet.
-  editable: boolean;
   // The folder the list shows. Messages in other folders are marked with their folder's name.
   // Search results have none, and then the folder of the picked message counts.
   listFolderId: number | undefined;
@@ -64,7 +62,6 @@ interface ConversationPaneProps {
 export function ConversationPane({
   selected,
   dark,
-  editable,
   listFolderId,
   folderNames,
 }: ConversationPaneProps) {
@@ -168,7 +165,6 @@ export function ConversationPane({
                 key={entry.id}
                 id={entry.id}
                 dark={dark}
-                editable={editable}
                 folderName={folderOf(entry)}
                 onHeaderClick={onHeaderClick}
               />
@@ -209,24 +205,25 @@ function FoldedMessage({ message, folderName, onOpen }: FoldedMessageProps) {
 interface LoadedCardProps {
   id: number;
   dark: boolean;
-  editable: boolean;
   folderName: string | undefined;
   onHeaderClick: (() => void) | undefined;
 }
 
 // An open message of the conversation other than the picked one, which the app loads already.
-function LoadedCard({ id, dark, editable, folderName, onHeaderClick }: LoadedCardProps) {
+function LoadedCard({ id, dark, folderName, onHeaderClick }: LoadedCardProps) {
   const styles = useStyles();
   const open = useMessage(id);
   const { message } = open;
 
-  // Opening an unread message marks it as read, once, like the picked one.
-  const marked = useRef(false);
+  // Opening an unread message marks it as read, once per opening, like the picked one.
+  const opened = useRef(false);
   useEffect(() => {
-    if (!message || !editable || message.isRead || marked.current) return;
-    marked.current = true;
-    void window.outlo.request('messages.setRead', { ids: [message.id], isRead: true });
-  }, [message, editable]);
+    if (!message || opened.current) return;
+    opened.current = true;
+    if (!message.isRead) {
+      void window.outlo.request('messages.setRead', { ids: [message.id], isRead: true });
+    }
+  }, [message]);
 
   if (!message) return <Spinner className={styles.loading} size="tiny" />;
   return (

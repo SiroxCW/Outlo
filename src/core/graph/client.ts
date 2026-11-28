@@ -35,7 +35,7 @@ export interface GraphClientOptions {
 }
 
 export interface GraphRequest {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH';
   body?: unknown;
   maxPageSize?: number;
 }
@@ -70,6 +70,8 @@ export class GraphClient {
   // The path is relative to the v1.0 root, or a complete address from an earlier answer.
   async request<Result>(path: string, request: GraphRequest = {}): Promise<Result> {
     const response = await this.limited(() => this.send(path, request, REQUEST_TIMEOUT));
+    // Some changes are answered without content.
+    if (response.status === 204) return undefined as Result;
     return (await response.json()) as Result;
   }
 

@@ -172,6 +172,7 @@ export function createCore(options: CoreOptions) {
           check.boolean(input.isRead, 'isRead'),
         );
         announce(folderIds, true);
+        engine?.sendChanges();
         return undefined;
       },
 
@@ -182,6 +183,7 @@ export function createCore(options: CoreOptions) {
           check.boolean(input.isFlagged, 'isFlagged'),
         );
         announce(folderIds, false);
+        engine?.sendChanges();
         return undefined;
       },
 
